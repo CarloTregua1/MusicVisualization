@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { BEATS_PER_LOOP, DANCE_CLIPS, DANCE_JOINTS, SAMPLES_PER_BEAT } from '../src/render/danceClips'
-import { Dancer, DANCE_CLIP_NAMES, MAX_POINT_SPEED, type DancerInput, type Skeleton } from '../src/render/dancer'
+import { Dancer, DANCE_CLIP_ENERGY, DANCE_CLIP_NAMES, MAX_POINT_SPEED, type DancerInput, type Skeleton } from '../src/render/dancer'
 import { MAX_COLOUR_LIGHTNESS } from '../src/render/tubeColor'
 
 const J = DANCE_JOINTS.length
@@ -111,5 +111,70 @@ describe('dancer', () => {
       const l = Number(/(\d+)%\)$/.exec(d.colour(0.5, light, 0.6))![1])
       expect(l).toBeLessThanOrEqual(MAX_COLOUR_LIGHTNESS)
     }
+  })
+
+  describe('phase 2: phrasing and reactions', () => {
+    const base = (index: number, phase: number, extra: Partial<DancerInput> = {}): DancerInput => ({
+      beat: { index, phase, period: 0.5 },
+      level: 0.7,
+      onset: 0,
+      bass: 0.5,
+      treble: 0.5,
+      brightness: 0.5,
+      ...extra,
+    })
+    const run = (d: Dancer, from: number, beats: number, extra: (f: number) => Partial<DancerInput> = () => ({})) => {
+      for (let f = 0; f < beats * 30; f++) {
+        const x = from + f / 30
+        d.update(1 / 60, base(Math.floor(x), x - Math.floor(x), extra(f)), { energy: 1 })
+      }
+    }
+
+    it('on a drop: switches clip at once, to one of the most energetic, and jumps', () => {
+      const d = new Dancer()
+      d.random = () => 0.5
+      run(d, 0, 3)
+      const before = d.move
+      const feet = () => Math.min(d.skeleton().footL.y, d.skeleton().footR.y)
+      const ground = feet()
+      d.update(1 / 60, base(3, 0.05, { drop: true }), { energy: 1 })
+      expect(d.move).not.toBe(before)
+      const top3 = Object.entries(DANCE_CLIP_ENERGY).filter(([n]) => n !== before).sort((x, y) => y[1] - x[1]).slice(0, 3).map(([n]) => n)
+      expect(top3).toContain(d.move)
+      // Feet leave the ground during the jump.
+      let peak = -Infinity
+      const d2 = new Dancer()
+      run(d2, 0, 3)
+      d2.update(1 / 60, base(3, 0.05, { drop: true }), { energy: 1 })
+      for (let f = 0; f < 20; f++) {
+        d2.update(1 / 60, base(3, 0.05 + f / 30), { energy: 1 })
+        peak = Math.max(peak, Math.min(d2.skeleton().footL.y, d2.skeleton().footR.y))
+      }
+      expect(peak).toBeGreaterThan(ground + 0.03)
+    })
+
+    it('freezes mid-pose in the dark and jumps back in when the light returns', () => {
+      const d = new Dancer()
+      run(d, 0, 2)
+      const pose = d.skeleton()
+      run(d, 2, 2, () => ({ light: 0 }))
+      expect(d.frozen).toBe(true)
+      expect(d.skeleton()).toEqual(pose)
+      run(d, 4, 0.2, () => ({ light: 1 }))
+      expect(d.frozen).toBe(false)
+    })
+
+    it('throws a hit accent on strong onsets: hands go up', () => {
+      const a = new Dancer()
+      const b = new Dancer()
+      run(a, 0, 2)
+      run(b, 0, 2)
+      for (let f = 0; f < 6; f++) {
+        a.update(1 / 60, base(2, f / 60), { energy: 1 })
+        b.update(1 / 60, base(2, f / 60, { onset: f === 0 ? 1 : 0 }), { energy: 1 })
+      }
+      const hands = (d: Dancer) => d.skeleton().handL.y + d.skeleton().handR.y
+      expect(hands(b)).toBeGreaterThan(hands(a) + 0.02)
+    })
   })
 })

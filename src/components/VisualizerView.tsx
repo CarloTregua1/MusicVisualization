@@ -45,6 +45,8 @@ interface Props {
   tempo: TempoTrack | null
   /** Beat times (s), once the beat tracker has run. */
   beats: Float32Array | null
+  /** Which beat starts a bar, and drop times (s), once known. */
+  structure: { downbeat: number; drops: Float32Array } | null
   tempoProgress: number
   playing: boolean
   time: number
@@ -52,7 +54,7 @@ interface Props {
   onExit: () => void
 }
 
-export function VisualizerView({ player, audio, tempo, beats, tempoProgress, playing, time, onSeek, onExit }: Props) {
+export function VisualizerView({ player, audio, tempo, beats, structure, tempoProgress, playing, time, onSeek, onExit }: Props) {
   const root = useRef<HTMLDivElement>(null)
   // Pixel budget keeps big full-screen displays smooth; bloom hides the softness.
   const canvas = useCanvas(1.5, 1.6e6)
@@ -67,6 +69,7 @@ export function VisualizerView({ player, audio, tempo, beats, tempoProgress, pla
   const paramsRef = useRef(params)
 
   const beatsRef = useRef(beats)
+  const structureRef = useRef(structure)
 
   useEffect(() => {
     tempoRef.current = tempo
@@ -75,6 +78,10 @@ export function VisualizerView({ player, audio, tempo, beats, tempoProgress, pla
   useEffect(() => {
     beatsRef.current = beats
   }, [beats])
+
+  useEffect(() => {
+    structureRef.current = structure
+  }, [structure])
 
   useEffect(() => {
     paramsRef.current = params
@@ -88,6 +95,7 @@ export function VisualizerView({ player, audio, tempo, beats, tempoProgress, pla
     const mapper = new BandMapper(FFT_SIZE, sampleRate)
     const tunnel = new FiberTunnel(mapper.count)
     const dancer = new Dancer()
+    let lastT = 0
     const backdrop = new Backdrop()
     // Sensitive enough to catch softer events (hats, plucks), up to ~5 strings a second.
     const onsets = new OnsetDetector(mapper.count, 0.18, 1.7, 8)
@@ -182,10 +190,19 @@ export function VisualizerView({ player, audio, tempo, beats, tempoProgress, pla
             const x = (t * shownBpm) / 60
             return { index: Math.floor(x), phase: x - Math.floor(x), period: 60 / shownBpm }
           })()
+      // Phrase the dance in bars: beat 0 of the grid is the song's first downbeat.
+      const song = structureRef.current
+      const barBeat = song ? { ...beatNow, index: beatNow.index - song.downbeat } : beatNow
+      // A drop happened if we just played across one (not on seeks).
+      let drop = false
+      if (song && t > lastT && t - lastT < 0.25) for (const d of song.drops) if (d > lastT && d <= t) drop = true
+      lastT = t
       dancer.update(
         dt,
         {
-          beat: beatNow,
+          beat: barBeat,
+          drop,
+          light: tunnel.stage.light,
           level: player.playing ? level : 0,
           onset,
           bass: lo / third,

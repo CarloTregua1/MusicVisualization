@@ -8,6 +8,13 @@ const HEAD_RADIUS = 0.065
 const CROSSFADE_BEATS = 1
 /** Above this tempo the dancer moves on every other beat (half time), as people do. */
 const HALF_TIME_BPM = 130
+/** Onsets stronger than this throw a hit accent. */
+const HIT_THRESHOLD = 0.6
+/** Below this light the dancer freezes mid-pose. */
+const FREEZE_LIGHT = 0.05
+/** A jump (on drops, and when the light returns) lasts this long (s) and rises this high (figure heights). */
+const JUMP_TIME = 0.42
+const JUMP_HEIGHT = 0.09
 
 /** Accent on the beat: rises quickly but smoothly, then eases out over the beat. */
 const pulse = (p: number) => Math.sin(Math.PI * Math.min(1, Math.pow(p, 0.6)))
@@ -35,7 +42,12 @@ export interface Skeleton {
 }
 
 export interface DancerInput {
+  /** Beat grid, with index 0 on a downbeat so 8-beat phrases align with bars. */
   beat: BeatPhase
+  /** True on the frame the music passes a drop. */
+  drop?: boolean
+  /** Scene light 0..1: the dancer freezes while it is dark (blackouts, silence). */
+  light?: number
   /** Loudness 0..1. */
   level: number
   /** Onset strength this frame, 0..1. */
@@ -57,6 +69,9 @@ const POSITION_SPRING = 18
 export const MAX_POINT_SPEED = 3
 
 const JOINT_NAMES = DANCE_JOINTS as readonly (keyof Skeleton)[]
+const PELVIS = JOINT_NAMES.indexOf('pelvis')
+const HANDS = [JOINT_NAMES.indexOf('handL'), JOINT_NAMES.indexOf('handR')]
+const FEET = [JOINT_NAMES.indexOf('footL'), JOINT_NAMES.indexOf('footR')]
 const FRAMES_PER_LOOP = BEATS_PER_LOOP * SAMPLES_PER_BEAT
 
 interface PreparedClip {
@@ -90,6 +105,8 @@ const CLIPS: PreparedClip[] = (() => {
 
 /** Names of the available dance clips. */
 export const DANCE_CLIP_NAMES = CLIPS.map((c) => c.name)
+/** Relative motion energy of each clip (0 calmest … 1 most energetic). */
+export const DANCE_CLIP_ENERGY: Record<string, number> = Object.fromEntries(CLIPS.map((c) => [c.name, c.energy]))
 
 /**
  * A neon dancer for the crater, animated with motion-captured dance loops
@@ -108,6 +125,13 @@ export class Dancer {
   private prevClip = 0
   /** Dance-beat index at which the current clip started. */
   private moveStart = -Infinity
+  /** Beat that phrases are counted from: 0 (a downbeat), or the last drop. */
+  private anchor = 0
+  /** Hit accent 0..1 (decays), and jump progress in seconds (−1 = not jumping). */
+  private punch = 0
+  private jumpT = -1
+  /** Frozen in the dark; jumps back in when the light returns. */
+  frozen = false
   private readonly pos = new Float32Array(JOINT_NAMES.length * 2)
   private readonly vel = new Float32Array(JOINT_NAMES.length * 2)
   private readonly target = new Float32Array(JOINT_NAMES.length * 2)
@@ -153,13 +177,39 @@ export class Dancer {
     this.accent = Math.max(input.onset, this.accent * Math.exp(-dt * 8))
     this.flash = Math.max(pulse(beat.phase) * Math.min(1, this.energy * 1.5), this.flash * Math.exp(-dt * 10))
 
-    // A new clip every BEATS_PER_LOOP dance beats.
-    const block = Math.floor(beat.index / BEATS_PER_LOOP)
-    if (block !== Math.floor(this.moveStart / BEATS_PER_LOOP)) {
+    // Blackouts and silence: freeze mid-pose; jump back in when the light returns.
+    const light = input.light ?? 1
+    if (light < FREEZE_LIGHT) {
+      this.frozen = true
+      return
+    }
+    if (this.frozen && light > 0.3) {
+      this.frozen = false
+      this.jumpT = 0
+    }
+
+    // A drop: start a high-energy clip right now, with a jump.
+    if (input.drop) {
+      this.anchor = beat.index
+      this.moveStart = -Infinity
+      this.jumpT = 0
+      this.energy = Math.max(this.energy, 0.9)
+    }
+    // A new clip every BEATS_PER_LOOP dance beats, counted from the anchor.
+    const rel = beat.index - this.anchor
+    const blockStart = this.anchor + Math.floor(rel / BEATS_PER_LOOP) * BEATS_PER_LOOP
+    if (blockStart !== this.moveStart) {
       this.prevClip = this.clip
-      this.clip = this.choose()
+      this.clip = input.drop ? this.chooseBig() : this.choose()
       this.move = CLIPS[this.clip].name
-      this.moveStart = block * BEATS_PER_LOOP
+      this.moveStart = blockStart
+    }
+    // Hit accents from strong onsets.
+    if (input.onset > HIT_THRESHOLD) this.punch = Math.max(this.punch, input.onset)
+    this.punch *= Math.exp(-dt * 7)
+    if (this.jumpT >= 0) {
+      this.jumpT += dt
+      if (this.jumpT > JUMP_TIME) this.jumpT = -1
     }
 
     // Target pose: the clip at this point of the beat grid, crossfaded from the previous one.
@@ -170,9 +220,20 @@ export class Dancer {
     t.fill(0)
     if (mix < 1) this.sample(CLIPS[this.prevClip], beats, amp, t, 1 - mix)
     this.sample(CLIPS[this.clip], beats, amp, t, mix)
-    // Onsets add a small lift of the whole body.
-    const lift = 0.02 * this.accent * this.energy
+    // Onsets add a small lift of the whole body; jumps lift everything, feet too.
+    const jump = this.jumpT >= 0 ? JUMP_HEIGHT * Math.sin((Math.PI * this.jumpT) / JUMP_TIME) : 0
+    const lift = 0.02 * this.accent * this.energy + jump
     for (let k = 1; k < t.length; k += 2) t[k] += lift
+    // Hit accent: hands punch out and up, the body dips (feet stay planted).
+    if (this.punch > 0.01) {
+      const p = this.punch * (0.4 + 0.6 * this.energy)
+      const pelvisX = t[2 * PELVIS]
+      for (const h of HANDS) {
+        t[2 * h] += Math.sign(t[2 * h] - pelvisX || 1) * 0.035 * p
+        t[2 * h + 1] += 0.06 * p
+      }
+      for (let j = 0; j < JOINT_NAMES.length; j++) if (!FEET.includes(j) && !HANDS.includes(j)) t[2 * j + 1] -= 0.025 * p
+    }
 
     if (!this.started) {
       this.pos.set(t)
@@ -201,6 +262,12 @@ export class Dancer {
 
     // Colour follows the sound's brightness, smoothed so it glides.
     this.colourPos += (input.brightness - this.colourPos) * (1 - Math.exp(-dt / 0.4))
+  }
+
+  /** For drops: one of the three most energetic clips (not the current one). */
+  private chooseBig(): number {
+    const ranked = CLIPS.map((c, i) => ({ i, e: c.energy })).filter((c) => c.i !== this.clip).sort((a, b) => b.e - a.e)
+    return ranked[Math.floor(this.random() * Math.min(3, ranked.length))].i
   }
 
   /** Picks the next clip: one whose own energy suits the music's, never the current one. */

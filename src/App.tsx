@@ -15,6 +15,7 @@ import { Analyzer } from './dsp/analyze'
 import { resynthesizeTrack, rms, rmsError, synthesize } from './dsp/resynth'
 import { PeakTracker } from './dsp/smoothing'
 import { trackBeats } from './dsp/beats'
+import { findDownbeat, findDrops } from './dsp/structure'
 import { analyzeTempo, type TempoTrack } from './dsp/tempo'
 import { readTheme } from './render/canvas'
 import { chainValue, drawEpicycles, Trace } from './render/epicyclesCanvas'
@@ -47,6 +48,7 @@ export default function App() {
   const [tempo, setTempo] = useState<TempoTrack | null>(null)
   const [tempoProgress, setTempoProgress] = useState(0)
   const [beats, setBeats] = useState<Float32Array | null>(null)
+  const [structure, setStructure] = useState<{ downbeat: number; drops: Float32Array } | null>(null)
 
   const settingsRef = useRef(settings)
   useEffect(() => {
@@ -81,6 +83,7 @@ export default function App() {
         setTempo(null)
         setTempoProgress(0)
         setBeats(null)
+        setStructure(null)
         setAudio(loaded)
       } catch {
         setError(`Couldn't decode “${file.name}”. Try another format.`)
@@ -131,7 +134,11 @@ export default function App() {
     }
     run(analyzeTempo(audio.mono, audio.sampleRate), setTempoProgress, (track) => {
       setTempo(track)
-      run(trackBeats(track), () => {}, setBeats)
+      run(trackBeats(track), () => {}, (b) => {
+        setBeats(b)
+        // Bars and drops, for the dancer's phrasing.
+        setStructure({ downbeat: findDownbeat(b, track), drops: findDrops(audio.mono, audio.sampleRate, b) })
+      })
     })
     return () => window.clearTimeout(timer)
   }, [audio])
@@ -300,6 +307,7 @@ export default function App() {
           audio={audio}
           tempo={tempo}
           beats={beats}
+          structure={structure}
           tempoProgress={tempoProgress}
           playing={playing}
           time={time}
