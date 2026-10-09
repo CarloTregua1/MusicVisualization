@@ -59,15 +59,30 @@ export interface DancerInput {
   brightness: number
 }
 
+export type DanceStyleName = 'auto' | 'energetic' | 'smooth' | 'robotic'
+
 export interface DancerStyle {
   /** Amplitude multiplier on the music's energy. */
   energy: number
+  /** Character of the dancing (default 'auto'). */
+  style?: DanceStyleName
+}
+
+/**
+ * How each style moves: spring stiffness and speed limit (motion feel), how
+ * strongly it prefers energetic or calm clips, amplitude, crossfade length,
+ * and (robotic) how many times per beat the pose snaps to a new position.
+ */
+const STYLES: Record<DanceStyleName, { spring: number; maxSpeed: number; bias: number; amp: number; crossfade: number; steps: number }> = {
+  auto: { spring: 18, maxSpeed: 3, bias: 0, amp: 1, crossfade: 1, steps: 0 },
+  energetic: { spring: 22, maxSpeed: 3.6, bias: 2.2, amp: 1.12, crossfade: 0.75, steps: 0 },
+  smooth: { spring: 10, maxSpeed: 2.2, bias: -2.2, amp: 0.95, crossfade: 2, steps: 0 },
+  robotic: { spring: 90, maxSpeed: 12, bias: 0, amp: 1, crossfade: 0.5, steps: 4 },
 }
 
 /** Joint positions spring toward the clip with this stiffness (rad/s): smooths clip switches and seeks. */
-const POSITION_SPRING = 18
 /** Fastest any joint may move, figure heights per second (a quick human hand). */
-export const MAX_POINT_SPEED = 3
+export const MAX_POINT_SPEED = STYLES.auto.maxSpeed
 
 const JOINT_NAMES = DANCE_JOINTS as readonly (keyof Skeleton)[]
 /** Poses kept for trails and echoes (~1 s at 60 fps). */
@@ -162,6 +177,8 @@ export class Dancer {
   colourPos = 0.3
   /** Brightness boost right after each beat, 0..1. */
   flash = 0
+  /** Clip preference of the current style (see STYLES). */
+  private styleBias = 0
   /** Random source for clip choice; replaceable in tests. */
   random: () => number = Math.random
 
@@ -276,9 +293,13 @@ export class Dancer {
     }
 
     // Target pose: the clip at this point of the beat grid, crossfaded from the previous one.
-    const beats = beat.index - this.moveStart + beat.phase
-    const mix = Math.min(1, beats / CROSSFADE_BEATS)
-    const amp = 0.15 + 0.85 * this.energy
+    const st = STYLES[style.style ?? 'auto']
+    this.styleBias = st.bias
+    let beats = beat.index - this.moveStart + beat.phase
+    // Robotic: hold the pose, then snap to the next position, `steps` times a beat.
+    if (st.steps > 0) beats = Math.floor(beats * st.steps) / st.steps
+    const mix = Math.min(1, beats / (CROSSFADE_BEATS * st.crossfade))
+    const amp = Math.min(1.15, (0.15 + 0.85 * this.energy) * st.amp)
     const t = this.target
     t.fill(0)
     if (mix < 1) this.sample(CLIPS[this.prevClip], beats, amp, t, 1 - mix)
@@ -302,19 +323,20 @@ export class Dancer {
       this.pos.set(t)
       this.started = true
     }
-    // Damped springs with a speed limit, sub-stepped for stability.
-    const steps = Math.max(1, Math.ceil(dt / (1 / 120)))
+    // Damped springs with a speed limit, sub-stepped for stability (finer for stiff styles).
+    const steps = Math.max(1, Math.ceil(dt * Math.max(120, st.spring * 2.5)))
     const h = dt / steps
     const J = JOINT_NAMES.length
     for (let n = 0; n < steps; n++) {
       for (let j = 0; j < J; j++) {
         const kx = 2 * j
-        let vx = this.vel[kx] + (POSITION_SPRING * POSITION_SPRING * (t[kx] - this.pos[kx]) - 2 * POSITION_SPRING * this.vel[kx]) * h
-        let vy = this.vel[kx + 1] + (POSITION_SPRING * POSITION_SPRING * (t[kx + 1] - this.pos[kx + 1]) - 2 * POSITION_SPRING * this.vel[kx + 1]) * h
+        const w = st.spring
+        let vx = this.vel[kx] + (w * w * (t[kx] - this.pos[kx]) - 2 * w * this.vel[kx]) * h
+        let vy = this.vel[kx + 1] + (w * w * (t[kx + 1] - this.pos[kx + 1]) - 2 * w * this.vel[kx + 1]) * h
         const sp = Math.hypot(vx, vy)
-        if (sp > MAX_POINT_SPEED) {
-          vx *= MAX_POINT_SPEED / sp
-          vy *= MAX_POINT_SPEED / sp
+        if (sp > st.maxSpeed) {
+          vx *= st.maxSpeed / sp
+          vy *= st.maxSpeed / sp
         }
         this.vel[kx] = vx
         this.vel[kx + 1] = vy
@@ -357,7 +379,10 @@ export class Dancer {
   /** Picks the next clip: one whose own energy suits the music's, never the current one. */
   private choose(): number {
     const e = this.energy
-    const w = CLIPS.map((c, i) => (i === this.clip ? 0 : 0.15 + Math.exp(-((c.energy - e) ** 2) / 0.12)))
+    // The style tilts the choice toward energetic (bias > 0) or calm (< 0) clips.
+    const w = CLIPS.map((c, i) =>
+      i === this.clip ? 0 : (0.15 + Math.exp(-((c.energy - e) ** 2) / 0.12)) * Math.exp(this.styleBias * (c.energy - 0.5)),
+    )
     const total = w.reduce((a, b) => a + b, 0)
     let r = this.random() * total
     for (let i = 0; i < w.length; i++) {

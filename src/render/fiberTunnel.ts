@@ -285,6 +285,34 @@ export class FiberTunnel {
     this.develop(this.tube(this.count - 1), input, onset)
   }
 
+  /** Camera of the last render, for projecting points on the land (crowd dancers). */
+  private camera: {
+    camX: number; camY: number; camZ: number
+    fx: number; fy: number; fz: number
+    rx: number; rz: number
+    ux: number; uy: number; uz: number
+    focal: number; cx: number; cy: number
+  } | null = null
+
+  /**
+   * Where a point on the land (x, z in crater radii, ground level) appears on
+   * screen after the last render, before the camera roll, and how many pixels
+   * one crater radius spans there. Null before the first render.
+   */
+  projectGround(x: number, z: number): { x: number; y: number; scale: number } | null {
+    const c = this.camera
+    if (!c) return null
+    const dx = x - c.camX
+    const dy = -c.camY
+    const dz = z - c.camZ
+    const zc = Math.max(0.25, dx * c.fx + dy * c.fy + dz * c.fz)
+    return {
+      x: c.cx + (c.focal * (dx * c.rx + dz * c.rz)) / zc,
+      y: c.cy - (c.focal * (dx * c.ux + dy * c.uy + dz * c.uz)) / zc,
+      scale: c.focal / zc,
+    }
+  }
+
   /** Live stomp ripples travelling outward through the rings. */
   private ripples: Ripple[] = []
   /** Raised hands of the dancer right now (0..1 each), applied to forming tubes. */
@@ -515,6 +543,7 @@ export class FiberTunnel {
     const ux = fy * rz
     const uy = fz * rx - fx * rz
     const uz = -fy * rx
+    this.camera = { camX, camY, camZ, fx, fy, fz, rx, rz, ux, uy, uz, focal, cx, cy }
     const project = (x: number, y: number, z: number, k: number) => {
       const dx = x - camX
       const dy = y - camY

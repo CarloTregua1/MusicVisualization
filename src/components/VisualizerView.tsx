@@ -95,6 +95,13 @@ export function VisualizerView({ player, audio, tempo, beats, structure, tempoPr
     const mapper = new BandMapper(FFT_SIZE, sampleRate)
     const tunnel = new FiberTunnel(mapper.count)
     const dancer = new Dancer()
+    // Crowd dancers around the rim, each with its own seed so they pick different moves.
+    const crowd = Array.from({ length: 6 }, (_, i) => {
+      const d = new Dancer()
+      let seed = 9973 * (i + 1)
+      d.random = () => ((seed = (seed * 16807) % 2147483647) / 2147483647)
+      return d
+    })
     let lastT = 0
     const backdrop = new Backdrop()
     // Sensitive enough to catch softer events (hats, plucks), up to ~5 strings a second.
@@ -197,20 +204,20 @@ export function VisualizerView({ player, audio, tempo, beats, structure, tempoPr
       let drop = false
       if (song && t > lastT && t - lastT < 0.25) for (const d of song.drops) if (d > lastT && d <= t) drop = true
       lastT = t
-      dancer.update(
-        dt,
-        {
-          beat: barBeat,
-          drop,
-          light: tunnel.stage.light,
-          level: player.playing ? level : 0,
-          onset,
-          bass: lo / third,
-          treble: hi / (n - 2 * third),
-          brightness: sum > 1e-6 ? weighted / sum / (n - 1) : 0,
-        },
-        { energy: pr.dancerEnergy },
-      )
+      const dancerInput = {
+        beat: barBeat,
+        drop,
+        light: tunnel.stage.light,
+        level: player.playing ? level : 0,
+        onset,
+        bass: lo / third,
+        treble: hi / (n - 2 * third),
+        brightness: sum > 1e-6 ? weighted / sum / (n - 1) : 0,
+      }
+      const dancerStyle = { energy: pr.dancerEnergy, style: pr.dancerStyle }
+      dancer.update(dt, dancerInput, dancerStyle)
+      const crowdSize = pr.dancerOn ? Math.round(pr.crowdSize) : 0
+      for (let i = 0; i < crowdSize; i++) crowd[i].update(dt, dancerInput, dancerStyle)
       // The dancer acts on the tubes: stomps ripple, raised hands pull up walls,
       // energetic moves add light. Nothing when the dancer is switched off.
       if (pr.dancerOn) {
@@ -223,6 +230,24 @@ export function VisualizerView({ player, audio, tempo, beats, structure, tempoPr
       }
       if (pr.dancerOn) {
         const st = tunnel.stage
+        // The crowd stands just outside the white rim, spread along its far
+        // half (behind the centre dancer), smaller with distance.
+        for (let i = 0; i < crowdSize; i++) {
+          // Two arcs, left and right of a gap straight behind the centre dancer.
+          const u = (i + 0.5) / crowdSize
+          const a = Math.PI * (u < 0.5 ? 0.1 + 0.64 * u : 0.58 + 0.64 * (u - 0.5))
+          const g = tunnel.projectGround(1.3 * Math.cos(a), 1.3 * Math.sin(a))
+          if (!g) continue
+          drawDancer(
+            ctx,
+            crowd[i],
+            { x: g.x, y: g.y, height: pr.dancerSize * 1.6 * g.scale, light: st.light, roll: st.roll, rollX: st.rollX, rollY: st.rollY },
+            temp,
+            pr.colourVariety,
+            pr.dancerThickness,
+            { trails: pr.dancerTrails * 0.6, echoes: 0, reflection: 0 },
+          )
+        }
         drawDancer(
           ctx,
           dancer,

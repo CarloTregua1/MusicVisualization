@@ -202,4 +202,45 @@ describe('dancer', () => {
       expect(d.pastSkeleton(5)).toBeNull()
     })
   })
+
+  describe('phase 5: dance styles', () => {
+    /** Runs one style for `beats` beats; reports mean clip energy, fastest joint speed, and share of near-still frames. */
+    const styleRun = (style: 'auto' | 'energetic' | 'smooth' | 'robotic', beats = 96) => {
+      let seed = 21
+      const d = new Dancer()
+      d.random = () => ((seed = (seed * 16807) % 2147483647) / 2147483647)
+      let energy = 0
+      let frames = 0
+      let fastest = 0
+      let still = 0
+      let prev: Skeleton | null = null
+      for (let f = 0; f < beats * 30; f++) {
+        const x = f / 30
+        d.update(1 / 60, { beat: { index: Math.floor(x), phase: x % 1, period: 0.5 }, level: 0.6, onset: 0, bass: 0.5, treble: 0.5, brightness: 0.5 }, { energy: 1, style })
+        energy += DANCE_CLIP_ENERGY[d.move]
+        frames++
+        const sk = d.skeleton()
+        if (prev) {
+          const v = maxStep(prev, sk) * 60
+          fastest = Math.max(fastest, v)
+          if (v < 0.05) still++
+        }
+        prev = sk
+      }
+      return { energy: energy / frames, fastest, still: still / frames }
+    }
+
+    it('energetic picks more energetic clips than smooth', () => {
+      expect(styleRun('energetic').energy).toBeGreaterThan(styleRun('smooth').energy + 0.15)
+    })
+
+    it('smooth moves slower than its limit; energetic may move faster than auto', () => {
+      expect(styleRun('smooth').fastest).toBeLessThanOrEqual(2.2 + 1e-6)
+      expect(styleRun('auto').fastest).toBeLessThanOrEqual(MAX_POINT_SPEED + 1e-6)
+    })
+
+    it('robotic holds still between snaps far more than auto', () => {
+      expect(styleRun('robotic').still).toBeGreaterThan(styleRun('auto').still + 0.2)
+    })
+  })
 })
