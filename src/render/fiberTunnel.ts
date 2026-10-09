@@ -130,14 +130,6 @@ export class FiberTunnel {
    * scene light.
    */
   stage = { x: 0, y: 0, rimRadius: 0, roll: 0, rollX: 0, rollY: 0, light: 0 }
-  /**
-   * Outline of the tube field after the last render (screen space before the
-   * camera roll in stage): the union of the visible rings' filled outlines.
-   * The background is clipped to it, so its colour only shows between tubes.
-   */
-  field: Path2D | null = null
-  /** Average colour position of the visible tubes (0 bass pink … 1 treble mint). */
-  meanColourPos = 0.4
   /** Live-tunable look; see tunnelParams.ts. */
   params: TunnelParams = { ...MEASURED_PARAMS }
   /** Brightness of the white tube = the scene's light, 0..1. */
@@ -256,11 +248,6 @@ export class FiberTunnel {
       const own = 0.5 * t.brightness + 0.5 * (loudest / (n - 1))
       this.colourMean += (own - this.colourMean) * (1 - Math.exp(-dt / COLOUR_MEMORY))
     }
-    if (this.count > 0) {
-      let sum = 0
-      for (let i = 0; i < this.count; i++) sum += this.tube(i).colourPos
-      this.meanColourPos = sum / this.count
-    }
     const sb = this.smoothBands
     for (let i = 0; i < sb.length; i++) sb[i] += (input.bands[i] - sb[i]) * a
 
@@ -341,11 +328,6 @@ export class FiberTunnel {
 
   private develop(t: Tube, input: FiberInput, onset: number) {
     const n = t.bands.length
-    if (this.count > 0) {
-      let sum = 0
-      for (let i = 0; i < this.count; i++) sum += this.tube(i).colourPos
-      this.meanColourPos = sum / this.count
-    }
     const sb = this.smoothBands
     // Light blur across bands keeps the shape organic; keep the peak of the window.
     for (let i = 0; i < n; i++) {
@@ -589,25 +571,6 @@ export class FiberTunnel {
       lightSY = cy - (focal * (dx * ux + dy * uy + dz * uz)) / zc
     }
 
-    // The tube field's outline, for the background: the union of every few
-    // visible rings' filled outlines (rings nest, so this covers the field).
-    {
-      const path = new Path2D()
-      let any = false
-      for (let i = 0; i < this.count; i++) {
-        const R = this.tube(i).radius
-        const depth = Math.log(R / R_RIM) / logSpan
-        const fade = (1 - smooth(0.85, 1, depth)) * (1 - smooth(0.7, 0.95, R / camDistance))
-        if (fade < 0.25 || (i % 3 !== 0 && i !== this.count - 1)) continue
-        const o = i * P
-        path.moveTo(xs[o], ys[o])
-        for (let p = 1; p < P; p++) path.lineTo(xs[o + p], ys[o + p])
-        path.closePath()
-        any = true
-      }
-      this.field = any ? path : null
-    }
-
     // Depth-sort every segment of every tube, far to near.
     let n = 0
     for (let i = 0; i < this.count; i++) {
@@ -723,7 +686,7 @@ export class FiberTunnel {
       if (pr.shadow > 0 && detailed) {
         lc.globalAlpha = fade * pr.shadow
         lc.strokeStyle = '#000'
-        lc.lineWidth = width * 1.35
+        lc.lineWidth = width * 1.9
         lc.stroke()
       }
       // Edge glow: tube edges seen against the light catch it.

@@ -9,7 +9,6 @@ import { tempoAt, type TempoTrack } from '../dsp/tempo'
 import { beatPhase } from '../dsp/beats'
 import { Backdrop } from '../render/backdrop'
 import { Dancer, drawDancer } from '../render/dancer'
-import { tubeHue } from '../render/tubeColor'
 import { bpmToTemperature, neon } from '../render/neon'
 import { FiberTunnel, type FiberInput } from '../render/fiberTunnel'
 import { MEASURED_PARAMS, type TunnelParams } from '../render/tunnelParams'
@@ -89,9 +88,6 @@ export function VisualizerView({ player, audio, tempo, beats, tempoProgress, pla
     const mapper = new BandMapper(FFT_SIZE, sampleRate)
     const tunnel = new FiberTunnel(mapper.count)
     const dancer = new Dancer()
-    // Background hue, smoothed as a unit vector so it glides around the colour wheel.
-    let bgX = 1
-    let bgY = 0
     const backdrop = new Backdrop()
     // Sensitive enough to catch softer events (hats, plucks), up to ~5 strings a second.
     const onsets = new OnsetDetector(mapper.count, 0.18, 1.7, 8)
@@ -161,30 +157,7 @@ export function VisualizerView({ player, audio, tempo, beats, tempoProgress, pla
       const lifetime = spread * Math.min(1.3, Math.max(0.75, 120 / shownBpm))
       tunnel.update(dt, input, sounding, onset, lifetime, songEvent)
       frames++
-      // Background: the complement of the tubes' average colour, so they pop.
-      const tubesHue = tubeHue(temp, 0.4, tunnel.meanColourPos, paramsRef.current.colourVariety)
-      const bgHue = ((tubesHue + 180 + paramsRef.current.backgroundHueShift) * Math.PI) / 180
-      const kb = 1 - Math.exp(-realDt / 1.2)
-      bgX += (Math.cos(bgHue) - bgX) * kb
-      bgY += (Math.sin(bgHue) - bgY) * kb
-      const st0 = tunnel.stage
-      backdrop.draw(ctx, dt, {
-        hue: (Math.atan2(bgY, bgX) * 180) / Math.PI,
-        level: player.playing ? level : 0,
-        beat,
-        strength: paramsRef.current.background,
-        saturation: paramsRef.current.backgroundSaturation,
-        clouds: paramsRef.current.backgroundClouds,
-        particles: paramsRef.current.backgroundParticles,
-        light: st0.light,
-        craterX: st0.x,
-        craterY: st0.y,
-        craterRadius: st0.rimRadius,
-        field: tunnel.field,
-        roll: st0.roll,
-        rollX: st0.rollX,
-        rollY: st0.rollY,
-      })
+      backdrop.draw(ctx, dt, { temperature: temp, level: player.playing ? level : 0, beat })
       tunnel.render(ctx)
 
       // The dancer, standing in the crater, moving on the tracked beats (or on

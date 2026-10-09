@@ -63,16 +63,6 @@ export interface TunnelParams {
   edgeGlow: number
   /** Cool fill light from the camera's side, so distant tubes keep their form. */
   fill: number
-  /** Brightness of the coloured background (complementary to the tubes); 0 = near black. */
-  background: number
-  /** Hue shift from the exact complement, degrees (the default leans toward warm amber). */
-  backgroundHueShift: number
-  /** Background saturation 0..1. */
-  backgroundSaturation: number
-  /** Drifting nebula clouds in the background 0..1. */
-  backgroundClouds: number
-  /** Particles streaming out of the crater 0..1. */
-  backgroundParticles: number
   /** Colour from frequency (0 = age ramp only, 1 = fully by frequency). */
   colourVariety: number
   /** Random moments per minute when the light cuts out while music plays (0 = never). */
@@ -118,16 +108,11 @@ export const MEASURED_PARAMS: TunnelParams = {
   cameraRange: 10,
   focal: 2.1,
   lightFalloff: 3.2,
-  shadow: 0.15,
+  shadow: 0.45,
   specular: 0.8,
   edgeGlow: 0.5,
   fill: 0.12,
   colourVariety: 0.6,
-  background: 0.7,
-  backgroundHueShift: -28,
-  backgroundSaturation: 0.9,
-  backgroundClouds: 0.5,
-  backgroundParticles: 0.5,
   blackoutsPerMinute: 4,
   blackoutLength: 0.7,
   dancerOn: true,
@@ -193,11 +178,6 @@ export const PARAM_SPECS: ParamSpec[] = [
   { key: 'blackoutsPerMinute', label: 'Blackouts per minute', group: 'Light', min: 0, max: 20, step: 0.5 },
   { key: 'blackoutLength', label: 'Blackout length (s)', group: 'Light', min: 0.1, max: 3, step: 0.05 },
   { key: 'colourVariety', label: 'Colour variety', group: 'Colour', min: 0, max: 1, step: 0.05 },
-  { key: 'background', label: 'Brightness', group: 'Background', min: 0, max: 1, step: 0.05 },
-  { key: 'backgroundHueShift', label: 'Hue shift (°)', group: 'Background', min: -180, max: 180, step: 1 },
-  { key: 'backgroundSaturation', label: 'Saturation', group: 'Background', min: 0, max: 1, step: 0.05 },
-  { key: 'backgroundClouds', label: 'Clouds', group: 'Background', min: 0, max: 1, step: 0.05 },
-  { key: 'backgroundParticles', label: 'Particles', group: 'Background', min: 0, max: 1, step: 0.05 },
   { key: 'dancerSize', label: 'Size', group: 'Dancer', min: 0.2, max: 1.2, step: 0.05 },
   { key: 'dancerEnergy', label: 'Energy', group: 'Dancer', min: 0, max: 2, step: 0.05 },
   { key: 'dancerThickness', label: 'Thickness', group: 'Dancer', min: 0.01, max: 0.08, step: 0.005 },

@@ -359,7 +359,7 @@ export interface Stage {
 }
 
 /**
- * Draws the dancer as neon tubes: soft glow, dark edge, body and lit core,
+ * Draws the dancer as neon tubes (no halo): dark edge, body and lit core,
  * with round caps, and the head as a tube loop. Brightness is the scene
  * light, so the figure goes dark with the scene; it flashes on beats.
  */
@@ -398,13 +398,7 @@ export function drawDancer(
     ctx.arc(X(sk.head), Y(sk.head), BONES.headRadius * H, 0, Math.PI * 2)
   }
   trace()
-  // Glow, then the cylinder: dark edge, body, lit core.
-  ctx.globalCompositeOperation = 'lighter'
-  ctx.globalAlpha = Math.min(1, 0.3 * light)
-  ctx.strokeStyle = dancer.colour(temperature, light * 1.1, variety)
-  ctx.lineWidth = width * 3
-  ctx.stroke()
-  ctx.globalCompositeOperation = 'source-over'
+  // The cylinder, with no halo around it: dark edge, body, lit core.
   ctx.globalAlpha = 1
   ctx.strokeStyle = dancer.colour(temperature, light * 0.3, variety)
   ctx.lineWidth = width
