@@ -1,3 +1,5 @@
+import { RollCamera } from './camera'
+
 /** Upper bound on fibres alive at once. */
 const MAX_FIBERS = 200
 const POINTS = 128
@@ -80,6 +82,9 @@ export class FiberTunnel {
   private serial = 0
   /** Decaying flash from onsets, brightens the whole structure. */
   private flash = 0
+  /** Slow left/right camera roll; this frame's angle in radians. */
+  private readonly roll = new RollCamera()
+  private rollAngle = 0
   /** Spectrum smoothed over time; fibres are emitted from this, not the raw frame. */
   private smoothBands: Float32Array
   private readonly pos: Float32Array
@@ -144,6 +149,7 @@ export class FiberTunnel {
    */
   update(dt: number, input: FiberInput, sounding: boolean, onset: number, lifetime: number) {
     this.time += dt
+    this.rollAngle = this.roll.update(dt)
     this.flash = Math.max(onset, this.flash * Math.exp(-dt * 5))
     // Smooth the spectrum over time so consecutive fibres are near-identical
     // and stack into parallel contours; an onset breaks through halfway.
@@ -300,6 +306,11 @@ export class FiberTunnel {
       }
       innerS = s
     }
+
+    // Camera roll: tilt the whole tunnel around the screen centre.
+    const rc = Math.cos(this.rollAngle)
+    const rs = Math.sin(this.rollAngle)
+    lc.setTransform(rc, rs, -rs, rc, cx - cx * rc + cy * rs, cy - cx * rs - cy * rc)
 
     // Draw, oldest first.
     for (let i = 0; i < this.count; i++) {
