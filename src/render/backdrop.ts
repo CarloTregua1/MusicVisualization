@@ -70,7 +70,7 @@ export class Backdrop {
       const r = minDim * (0.55 + 0.1 * Math.sin(t * 0.21 + k * 1.7)) * (1 + 0.15 * beat)
       const light = 5 + 4 * level + 3 * beat
       const g = ctx.createRadialGradient(bx, by, 0, bx, by, r)
-      g.addColorStop(0, `hsla(${(hue + (k - 1) * 24).toFixed(1)}, 70%, ${light.toFixed(1)}%, 0.5)`)
+      g.addColorStop(0, `hsla(${(hue + (k - 1) * 24).toFixed(1)}, 70%, ${light.toFixed(1)}%, 0.3)`)
       g.addColorStop(1, `hsla(${(hue + (k - 1) * 24).toFixed(1)}, 85%, ${light.toFixed(1)}%, 0)`)
       ctx.fillStyle = g
       ctx.fillRect(bx - r, by - r, r * 2, r * 2)
