@@ -227,12 +227,77 @@ function beat0HalfTime(period: number): boolean {
   return period > 0 && 60 / period > HALF_TIME_BPM
 }
 
-/** Bones to draw, as chains of joints (each drawn as one tube). */
-const CHAINS: (keyof Skeleton)[][] = [
-  ['footL', 'kneeL', 'hipL', 'pelvis', 'hipR', 'kneeR', 'footR'],
-  ['pelvis', 'neck'],
-  ['handL', 'elbowL', 'shoulderL', 'neck', 'shoulderR', 'elbowR', 'handR'],
+/**
+ * Limb radii in figure heights, tapered like a body: each bone runs from its
+ * radius at the first joint to its radius at the second.
+ */
+const LIMBS: [keyof Skeleton, keyof Skeleton, number, number][] = [
+  ['hipL', 'kneeL', 0.05, 0.036],
+  ['kneeL', 'footL', 0.034, 0.022],
+  ['hipR', 'kneeR', 0.05, 0.036],
+  ['kneeR', 'footR', 0.034, 0.022],
+  ['shoulderL', 'elbowL', 0.034, 0.026],
+  ['elbowL', 'handL', 0.025, 0.018],
+  ['shoulderR', 'elbowR', 0.034, 0.026],
+  ['elbowR', 'handR', 0.025, 0.018],
 ]
+/** Neck radius, and the default limb scale the thickness setting is relative to. */
+const NECK_RADIUS = 0.022
+const DEFAULT_THICKNESS = 0.035
+
+/** Path of a tapered capsule: circles of radius ra at a and rb at b, joined by tangent-ish sides. */
+function capsule(path: Path2D, ax: number, ay: number, ra: number, bx: number, by: number, rb: number) {
+  const dx = bx - ax
+  const dy = by - ay
+  const len = Math.hypot(dx, dy) || 1e-6
+  const ang = Math.atan2(dy, dx)
+  // Angle of the side lines for circles of different radii (external tangents).
+  const off = Math.acos(Math.max(-1, Math.min(1, (ra - rb) / len)))
+  path.moveTo(ax + ra * Math.cos(ang + off), ay + ra * Math.sin(ang + off))
+  path.arc(ax, ay, ra, ang + off, ang - off + 2 * Math.PI, false)
+  path.arc(bx, by, rb, ang - off, ang + off, false)
+  path.closePath()
+}
+
+/**
+ * A smooth, slightly waisted torso from shoulders to hips, shrunk toward its
+ * centre by `scale` (so inner shading layers sit inside the silhouette).
+ */
+function torso(path: Path2D, sk: Skeleton, X0: (j: Joint) => number, Y0: (j: Joint) => number, scale: number) {
+  const c = {
+    x: (sk.shoulderL.x + sk.shoulderR.x + sk.hipL.x + sk.hipR.x) / 4,
+    y: (sk.shoulderL.y + sk.shoulderR.y + sk.hipL.y + sk.hipR.y) / 4,
+  }
+  // Shrink more across than along the body, so the core stays a long stripe.
+  const sx = scale
+  const sy = 1 - (1 - scale) * 0.45
+  const X = (j: Joint) => X0({ x: c.x + (j.x - c.x) * sx, y: c.y + (j.y - c.y) * sy })
+  const Y = (j: Joint) => Y0({ x: c.x + (j.x - c.x) * sx, y: c.y + (j.y - c.y) * sy })
+  const sL = sk.shoulderL
+  const sR = sk.shoulderR
+  const hL = sk.hipL
+  const hR = sk.hipR
+  const mid = (a: Joint, b: Joint, t: number) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t })
+  // Waist: 60% of the way down, pulled in a little toward the spine.
+  const wL = mid(sL, hL, 0.6)
+  const wR = mid(sR, hR, 0.6)
+  const spine = mid(mid(sL, sR, 0.5), mid(hL, hR, 0.5), 0.6)
+  const pinch = 0.18
+  const inL = { x: wL.x + (spine.x - wL.x) * pinch, y: wL.y }
+  const inR = { x: wR.x + (spine.x - wR.x) * pinch, y: wR.y }
+  // Shoulders extend slightly past the joints, hips slightly past the hip joints.
+  const out = (a: Joint, b: Joint, k: number) => ({ x: a.x + (a.x - b.x) * k, y: a.y + (a.y - b.y) * k })
+  const sl = out(sL, sR, 0.12)
+  const sr = out(sR, sL, 0.12)
+  const hl = out(hL, hR, 0.35)
+  const hr = out(hR, hL, 0.35)
+  path.moveTo(X(sl), Y(sl))
+  path.quadraticCurveTo(X(mid(sl, sr, 0.5)), Y(mid(sl, sr, 0.5)), X(sr), Y(sr))
+  path.quadraticCurveTo(X(inR), Y(inR), X(hr), Y(hr))
+  path.lineTo(X(hl), Y(hl))
+  path.quadraticCurveTo(X(inL), Y(inL), X(sl), Y(sl))
+  path.closePath()
+}
 
 export interface Stage {
   /** Where the figure's feet stand, on screen. */
@@ -249,8 +314,9 @@ export interface Stage {
 }
 
 /**
- * Draws the dancer as neon tubes (no halo): dark edge, body and lit core,
- * with round caps, and the head as a tube loop. Brightness is the scene
+ * Draws the dancer as a body of neon tubes (no halo): tapered limbs, a
+ * waisted torso, neck and head, mitt hands and wedge feet, each shaded as a
+ * dark edge, a body and a lit core, with a rim light on its outline. Brightness is the scene
  * light, so the figure goes dark with the scene; it flashes on beats.
  */
 export function drawDancer(
@@ -266,38 +332,52 @@ export function drawDancer(
   const H = stage.height
   const X = (j: Joint) => stage.x + j.x * H
   const Y = (j: Joint) => stage.y - j.y * H
-  const width = Math.max(1.5, thickness * H)
   const light = stage.light * (1 + 0.6 * dancer.flash)
 
   const c = Math.cos(stage.roll)
   const s = Math.sin(stage.roll)
   ctx.save()
   ctx.setTransform(c, s, -s, c, stage.rollX - stage.rollX * c + stage.rollY * s, stage.rollY - stage.rollX * s - stage.rollY * c)
-  ctx.lineCap = 'round'
-  ctx.lineJoin = 'round'
-  const trace = () => {
-    ctx.beginPath()
-    for (const chain of CHAINS) {
-      chain.forEach((name, i) => {
-        const j = sk[name]
-        if (i === 0) ctx.moveTo(X(j), Y(j))
-        else ctx.lineTo(X(j), Y(j))
-      })
+  const k = thickness / DEFAULT_THICKNESS
+  // Body as filled shapes, built at a given scale of every radius, so the
+  // same silhouette can be drawn as a dark edge, a body and a lit core.
+  const body = (scale: number) => {
+    const p = new Path2D()
+    for (const [a, b, ra, rb] of LIMBS) capsule(p, X(sk[a]), Y(sk[a]), ra * k * H * scale, X(sk[b]), Y(sk[b]), rb * k * H * scale)
+    capsule(p, X(sk.neck), Y(sk.neck), NECK_RADIUS * k * H * scale, X(sk.head), Y(sk.head), NECK_RADIUS * k * H * scale)
+    torso(p, sk, X, Y, scale)
+    // Hands: small mitts carried on past the wrist along the forearm.
+    for (const [e, h] of [['elbowL', 'handL'], ['elbowR', 'handR']] as const) {
+      const dx = sk[h].x - sk[e].x
+      const dy = sk[h].y - sk[e].y
+      const len = Math.hypot(dx, dy) || 1
+      const tip = { x: sk[h].x + (dx / len) * 0.045, y: sk[h].y + (dy / len) * 0.045 }
+      capsule(p, X(sk[h]), Y(sk[h]), 0.02 * k * H * scale, X(tip), Y(tip), 0.016 * k * H * scale)
     }
-    ctx.moveTo(X(sk.head) + HEAD_RADIUS * H, Y(sk.head))
-    ctx.arc(X(sk.head), Y(sk.head), HEAD_RADIUS * H, 0, Math.PI * 2)
+    // Feet: short wedges pointing slightly outward, resting on the ankle.
+    for (const [f, dir] of [['footL', -1], ['footR', 1]] as const) {
+      const toe = { x: sk[f].x + dir * 0.05, y: sk[f].y - 0.012 }
+      capsule(p, X(sk[f]), Y(sk[f]), 0.022 * k * H * scale, X(toe), Y(toe), 0.014 * k * H * scale)
+    }
+    p.moveTo(X(sk.head) + HEAD_RADIUS * H * Math.max(0.55, scale), Y(sk.head))
+    p.arc(X(sk.head), Y(sk.head), HEAD_RADIUS * H * Math.max(0.55, scale), 0, Math.PI * 2)
+    return p
   }
-  trace()
-  // The cylinder, with no halo around it: dark edge, body, lit core.
+  // Rim light: the white rim surrounds the dancer, so its silhouette catches
+  // light. Drawn as a slightly larger body behind it, so only the outer edge
+  // glows (no lines where limbs overlap).
+  ctx.globalCompositeOperation = 'lighter'
+  ctx.globalAlpha = Math.min(1, 0.6 * stage.light)
+  ctx.fillStyle = dancer.colour(temperature, light * 1.2, variety)
+  ctx.fill(body(1.14), 'nonzero')
+  ctx.globalCompositeOperation = 'source-over'
   ctx.globalAlpha = 1
-  ctx.strokeStyle = dancer.colour(temperature, light * 0.3, variety)
-  ctx.lineWidth = width
-  ctx.stroke()
-  ctx.strokeStyle = dancer.colour(temperature, light * 0.8, variety)
-  ctx.lineWidth = width * 0.7
-  ctx.stroke()
-  ctx.strokeStyle = dancer.colour(temperature, light * 1.15, variety)
-  ctx.lineWidth = width * 0.32
-  ctx.stroke()
+  // Dark edge, body, then a lit core: rounded like the tubes.
+  ctx.fillStyle = dancer.colour(temperature, light * 0.28, variety)
+  ctx.fill(body(1), 'nonzero')
+  ctx.fillStyle = dancer.colour(temperature, light * 0.7, variety)
+  ctx.fill(body(0.72), 'nonzero')
+  ctx.fillStyle = dancer.colour(temperature, light * 1.05, variety)
+  ctx.fill(body(0.38), 'nonzero')
   ctx.restore()
 }
