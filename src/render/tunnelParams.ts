@@ -142,7 +142,7 @@ export const MEASURED_PARAMS: TunnelParams = {
   dancerTrails: 0.6,
   dancerEchoes: 0.5,
   dancerReflection: 0.5,
-  dancerSkin: 'neon',
+  dancerSkin: 'constellation',
   dancerStyle: 'auto',
   crowdSize: 0,
   stompRipples: 0.7,
