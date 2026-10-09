@@ -1,3 +1,5 @@
+import type { SkinName } from './dancerSkins'
+
 /** Everything that defines how the tubes feel, tunable live from the Visualizer. */
 export interface TunnelParams {
   /**
@@ -83,6 +85,8 @@ export interface TunnelParams {
   dancerEchoes: number
   /** The dancer's reflection on the crater floor, 0..1. */
   dancerReflection: number
+  /** The dancer's look. */
+  dancerSkin: SkinName
   /** Dance style: auto, energetic, smooth or robotic. */
   dancerStyle: 'auto' | 'energetic' | 'smooth' | 'robotic'
   /** Extra dancers around the crater's rim (0 = only the centre dancer). */
@@ -138,6 +142,7 @@ export const MEASURED_PARAMS: TunnelParams = {
   dancerTrails: 0.6,
   dancerEchoes: 0.5,
   dancerReflection: 0.5,
+  dancerSkin: 'neon',
   dancerStyle: 'auto',
   crowdSize: 0,
   stompRipples: 0.7,

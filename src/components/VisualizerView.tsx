@@ -245,7 +245,7 @@ export function VisualizerView({ player, audio, tempo, beats, structure, tempoPr
             temp,
             pr.colourVariety,
             pr.dancerThickness,
-            { trails: pr.dancerTrails * 0.6, echoes: 0, reflection: 0 },
+            { trails: pr.dancerTrails * 0.6, echoes: 0, reflection: 0, skin: pr.dancerSkin },
           )
         }
         drawDancer(
@@ -255,7 +255,7 @@ export function VisualizerView({ player, audio, tempo, beats, structure, tempoPr
           temp,
           pr.colourVariety,
           pr.dancerThickness,
-          { trails: pr.dancerTrails, echoes: pr.dancerEchoes, reflection: pr.dancerReflection },
+          { trails: pr.dancerTrails, echoes: pr.dancerEchoes, reflection: pr.dancerReflection, skin: pr.dancerSkin },
         )
       }
 

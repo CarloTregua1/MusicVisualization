@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { SKINS, type SkinName } from '../render/dancerSkins'
 import { PARAM_SPECS, PRESETS, type TunnelParams } from '../render/tunnelParams'
 
 interface Props {
@@ -91,6 +92,23 @@ export function TuningPanel({ params, fps, onChange, onClose }: Props) {
                   </button>
                 </div>
               </div>
+            )}
+            {group === 'Dancer' && (
+              <label className="tune-row">
+                <span>Skin</span>
+                <select
+                  className="tune-select"
+                  value={params.dancerSkin}
+                  onChange={(e) => onChange({ ...params, dancerSkin: e.target.value as SkinName })}
+                >
+                  {SKINS.map((sk) => (
+                    <option key={sk} value={sk}>
+                      {sk[0].toUpperCase() + sk.slice(1)}
+                      {sk === 'robot' || sk === 'adventurer' ? ' (Kenney, CC0)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
             )}
             {group === 'Dancer' && (
               <div className="tune-row">
