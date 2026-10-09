@@ -55,6 +55,19 @@ export function TuningPanel({ params, fps, onChange, onClose }: Props) {
             <h3>{group}</h3>
             {group === 'Flow' && (
               <div className="tune-row">
+                <span>Direction</span>
+                <div className="seg tune-seg" role="group" aria-label="Direction">
+                  <button aria-pressed={!params.inward} onClick={() => onChange({ ...params, inward: false })}>
+                    Outward
+                  </button>
+                  <button aria-pressed={params.inward} onClick={() => onChange({ ...params, inward: true })}>
+                    Inward
+                  </button>
+                </div>
+              </div>
+            )}
+            {group === 'Flow' && (
+              <div className="tune-row">
                 <span>Tube timing</span>
                 <div className="seg tune-seg" role="group" aria-label="Tube timing">
                   <button aria-pressed={!params.followSong} onClick={() => onChange({ ...params, followSong: false })}>

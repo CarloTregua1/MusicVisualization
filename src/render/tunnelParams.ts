@@ -6,6 +6,13 @@ export interface TunnelParams {
    * the white rim keeps developing until the next one.
    */
   followSong: boolean
+  /**
+   * Direction of travel. false (outward): tubes develop as the white crater
+   * rim and spread out across the land. true (inward): tubes are born at the
+   * edge of the land, travel in, turn white as the innermost tube and sink
+   * into the crater.
+   */
+  inward: boolean
   /** In follow-the-song mode, how small an event can start a new tube (0 = only big hits, 1 = every small change). */
   songSensitivity: number
   /** Tubes born per second in fixed-rate mode (each develops as the white rim for 1/rate s). */
@@ -65,6 +72,7 @@ export interface TunnelParams {
 /** Starting point measured from the reference video's frames. */
 export const MEASURED_PARAMS: TunnelParams = {
   followSong: false,
+  inward: false,
   songSensitivity: 0.6,
   tubesPerSecond: 30,
   spreadSeconds: 3.4,

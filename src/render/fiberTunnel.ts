@@ -87,6 +87,11 @@ const smooth = (e0: number, e1: number, x: number) => {
  * 4. The white rim is the scene's light. Its brightness follows the music,
  *    so when the music stops it goes dark and so does everything.
  *
+ * With params.inward the motion runs the other way: tubes are born and
+ * develop at the edge of the land, travel in, become the white innermost
+ * tube (and the light) when they reach the crater, and vanish into it as
+ * the next one arrives.
+ *
  * The camera stands on the land, a little above it, looking at the crater.
  * Tubes are drawn as shaded cylinders (dark edge, lit body, highlight toward
  * the light), with every piece sorted far to near so nearer tubes pass in
@@ -205,7 +210,9 @@ export class FiberTunnel {
     // Finished rings grow exponentially (even spacing in perspective); the
     // developing white rim stays at the crater.
     const k = Math.log(R_MAX / R_RIM) / lifetime
-    const grow = Math.exp(k * dt)
+    const inward = this.params.inward
+    // Outward, rings grow from the rim; inward, they shrink toward it.
+    const grow = Math.exp((inward ? -k : k) * dt)
     const followSong = this.params.followSong
     const develop = 1 / this.params.tubesPerSecond
     for (let i = 0; i < this.count; i++) {
@@ -214,7 +221,9 @@ export class FiberTunnel {
       // The rim stays put while it develops; in song mode, until the next event.
       if (i < this.count - 1 || (!followSong && t.age > develop)) t.radius *= grow
     }
-    while (this.count > 0 && this.tube(0).radius >= R_MAX) this.count--
+    // Remove the oldest tube once it leaves: past the edge outward, or into the
+    // crater inward, where the next tube takes over as the white rim at once.
+    while (this.count > 0 && (inward ? this.tube(0).radius <= R_RIM : this.tube(0).radius >= R_MAX)) this.count--
 
     if (!playing) return
     const rim = this.count > 0 ? this.tube(this.count - 1) : null
@@ -232,7 +241,7 @@ export class FiberTunnel {
     t.level = 0
     t.onset = 0
     t.temperature = input.temperature
-    t.radius = R_RIM
+    t.radius = this.params.inward ? R_MAX : R_RIM
     t.age = 0
     t.jitter = ((this.head * 0.618034) % 1) - 0.5
     t.turn = 0.45 * Math.sin(this.time * 0.07) + 0.15 * Math.sin(this.time * 0.19 + 1)
@@ -496,9 +505,11 @@ export class FiberTunnel {
     lc.lineJoin = 'round'
 
     // The white rim is the light: a halo whose strength follows the music.
-    const rimTube = this.tube(this.count - 1)
+    // The innermost tube: the newest when moving outward, the oldest when moving inward.
+    const whiteIndex = pr.inward ? 0 : this.count - 1
+    const rimTube = this.tube(whiteIndex)
     if (this.light > 0.01) {
-      const o = (this.count - 1) * P
+      const o = whiteIndex * P
       lc.globalCompositeOperation = 'lighter'
       lc.lineCap = 'round'
       lc.globalAlpha = Math.min(1, 0.35 * this.light)
@@ -525,9 +536,9 @@ export class FiberTunnel {
       const b = Math.round(((sg + 1) * P) / SEGMENTS)
       const pc = (a + b) >> 1
       const shift = Math.round((t.turn / (2 * Math.PI)) * P)
-      // Only the innermost tube is ever white: the moment a newer tube is born,
-      // this one takes its colour (tubeColor caps every other tube's lightness).
-      const white = i === this.count - 1 ? 1 : 0
+      // Only the innermost tube is ever white; every other tube keeps its colour
+      // (tubeColor caps their lightness so none can look white).
+      const white = i === whiteIndex ? 1 : 0
       const tint = t.jitter * 16
       const width = Math.max(0.9, (2 * pr.tubeRadius * Math.pow(R / R_RIM, pr.thicknessGrowth) * focal) / zs[o + pc])
       const nb = i > 0 ? i - 1 : i + 1 < this.count ? i + 1 : -1

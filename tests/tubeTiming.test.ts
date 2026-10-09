@@ -45,4 +45,21 @@ describe('tube timing', () => {
     const rim = (t as unknown as { tube: (i: number) => { radius: number } }).tube(0)
     expect(rim.radius).toBe(1)
   })
+
+  it('inward: tubes are born at the edge, travel in, and vanish at the crater', () => {
+    const t = new FiberTunnel(48)
+    t.params = { ...t.params, inward: true, tubesPerSecond: 10, spreadSeconds: 2 }
+    const tube = (i: number) => (t as unknown as { tube: (i: number) => { radius: number } }).tube(i)
+    run(t, 0.05)
+    expect(tube(0).radius).toBe(6) // born at the edge of the land (R_MAX)
+    run(t, 1)
+    const n = count(t)
+    // Oldest (index 0) is innermost; radii shrink toward the crater.
+    for (let i = 1; i < n; i++) expect(tube(i).radius).toBeGreaterThanOrEqual(tube(i - 1).radius)
+    run(t, 3)
+    // After the spread time, the first tubes have reached the crater and gone:
+    // the innermost remaining tube is at or outside the rim.
+    for (let i = 0; i < count(t); i++) expect(tube(i).radius).toBeGreaterThan(1)
+    expect(count(t)).toBeLessThan(10 * 4.05)
+  })
 })
