@@ -19,14 +19,14 @@ class FakeContext {
     if (FakeContext.resumeWorks) this.state = 'running'
   }
   createBufferSource() {
-    const ctx = this
+    const started = this.started
     return {
       buffer: null as unknown,
       onended: null as unknown,
       connect() {},
       disconnect() {},
       start(_when: number, offset: number) {
-        ctx.started.push(offset)
+        started.push(offset)
       },
       stop() {},
     }
