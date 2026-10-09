@@ -29,9 +29,11 @@ const WALL_MIN_CONTRAST = 0.02
 /** …and by this much (beyond the minimum) for a full-height wall. */
 const WALL_CONTRAST = 0.12
 /** Bell weights used to spread each peak over its neighbours, so walls are rounded curtains. */
-const WALL_SPREAD = [1, 3, 4, 3, 1]
+const WALL_SPREAD = [1, 4, 1]
 /** Small irregular waves along each tube; their height follows the loudness. */
-const WAVE_HEIGHT = 0.3
+const WAVE_HEIGHT = 0.5
+/** Sharpness of crests: higher = narrower, more acute peaks over flat troughs. */
+const CREST_SHARPNESS = 3
 /** Sideways share of the wave displacement: waves grow mostly vertically. */
 const VERTICAL_BIAS = 0.3
 /** Irregular lumps in each tube's outline (and so in the hollow's rim), in tunnel radii. */
@@ -429,7 +431,8 @@ export class FiberTunnel {
         const k0 = q | 0
         const f = q - k0
         const lift = t.peaks[k0] * (1 - f) + t.peaks[Math.min(last, k0 + 1)] * f
-        const shape = lift * lift * (3 - 2 * lift)
+        // Sharp profile: walls rise to narrow, pointed crests.
+        const shape = Math.pow(lift, CREST_SHARPNESS - 0.8)
         const th = (p / P) * 2 * Math.PI
         // Irregular outline: a few low lumps of unrelated sizes, drifting slowly.
         const lumps =
@@ -440,7 +443,9 @@ export class FiberTunnel {
         const v = t.bands[k0] * (1 - f) + t.bands[Math.min(last, k0 + 1)] * f
         const waves =
           0.5 * Math.sin(7 * th + b * 0.9) + 0.3 * Math.sin(12 * th - b * 1.3 + 2.3) + 0.2 * Math.sin(19 * th + b * 2.1 + 0.6)
-        const ripple = WAVE_HEIGHT * v * v * (0.5 + 0.5 * waves)
+        // Raising the wave to a power keeps troughs flat and squeezes each crest
+        // into a narrow, steep peak (acute angles instead of rounded humps).
+        const ripple = WAVE_HEIGHT * v * v * Math.pow(0.5 + 0.5 * waves, CREST_SHARPNESS)
         const h = (WALL_HEIGHT * shape + ripple) * amp * this.wallWeight[p]
         // Grow away from the hollow, mostly vertically: up over the top half,
         // down under the bottom half, only slightly sideways at the sides.
