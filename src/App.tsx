@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { loadAudioFile, type LoadedAudio } from './audio/loader'
-import { Player } from './audio/player'
+import { getPlayer } from './audio/shared'
 import { Controls } from './components/Controls'
 import { DropZone } from './components/DropZone'
 import { EpicyclesPanel } from './components/EpicyclesPanel'
@@ -26,8 +26,6 @@ import type { Term } from './types'
 /** Formula, error and clock text refresh at ~15 fps; canvases run every frame. */
 const TEXT_INTERVAL_MS = 1000 / 15
 
-let sharedPlayer: Player | null = null
-const getPlayer = () => (sharedPlayer ??= new Player())
 
 const resynthKey = (s: Settings) => `${s.n}/${s.size}`
 
@@ -36,6 +34,7 @@ export default function App() {
   const [audio, setAudio] = useState<LoadedAudio | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [playerError, setPlayerError] = useState<string | null>(null)
   const [settings, setSettings] = useState<Settings>({ n: 10, size: 2048, smoothing: false, notes: false, timeScale: 1 / 500 })
   const [playing, setPlaying] = useState(false)
   const [ab, setAb] = useState<'original' | 'math'>('original')
@@ -60,6 +59,7 @@ export default function App() {
   useEffect(
     () =>
       player.subscribe(() => {
+        setPlayerError(player.error)
         setPlaying(player.playing)
         setAb(player.abState)
         setTime(player.position())
@@ -89,6 +89,17 @@ export default function App() {
   )
 
   const patchSettings = useCallback((patch: Partial<Settings>) => setSettings((s) => ({ ...s, ...patch })), [])
+
+  // Any interaction wakes an audio context the browser suspended (Safari does this).
+  useEffect(() => {
+    const unlock = () => player.unlock()
+    window.addEventListener('pointerdown', unlock)
+    window.addEventListener('keydown', unlock)
+    return () => {
+      window.removeEventListener('pointerdown', unlock)
+      window.removeEventListener('keydown', unlock)
+    }
+  }, [player])
 
   // Keyboard: space toggles playback, ←/→ seek by 5 s.
   useEffect(() => {
@@ -257,7 +268,11 @@ export default function App() {
         {audio && <DropZone onFile={onFile} compact busy={loading} />}
       </header>
 
-      {error && <div className="error" role="alert">{error}</div>}
+      {(error ?? playerError) && (
+        <div className="error" role="alert">
+          {error ?? playerError}
+        </div>
+      )}
 
       {!audio ? (
         <main className="landing">

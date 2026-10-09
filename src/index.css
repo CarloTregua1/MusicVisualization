@@ -44,7 +44,13 @@ button, input, select { font: inherit; color: inherit; }
 .btn:hover:not(:disabled) { border-color: var(--accent); }
 .btn:disabled { opacity: 0.5; cursor: default; }
 
-.error { margin: 12px var(--gutter) 0; padding: 10px 14px; border-radius: 10px; background: #2a1215; color: var(--danger); }
+.error {
+  /* Floats above both views, including the full-screen visualizer. */
+  position: fixed; z-index: 40; top: 64px; left: 50%; transform: translateX(-50%);
+  width: max-content; max-width: calc(100% - 32px);
+  padding: 10px 14px; border-radius: 10px; background: #2a1215; color: var(--danger);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+}
 
 /* Landing */
 .landing { flex: 1; display: grid; place-items: center; padding: var(--gutter); }
