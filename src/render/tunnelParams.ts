@@ -69,6 +69,14 @@ export interface TunnelParams {
   blackoutsPerMinute: number
   /** Average length of a blackout, seconds. */
   blackoutLength: number
+  /** Show the dancer in the crater. */
+  dancerOn: boolean
+  /** Dancer height relative to the crater's width on screen. */
+  dancerSize: number
+  /** How strongly the dancer moves with the music's energy. */
+  dancerEnergy: number
+  /** Dancer limb thickness relative to its height. */
+  dancerThickness: number
   /** Strength of the glow (bloom). */
   bloom: number
   /** Strength of the motion trail. */
@@ -107,6 +115,10 @@ export const MEASURED_PARAMS: TunnelParams = {
   colourVariety: 0.6,
   blackoutsPerMinute: 4,
   blackoutLength: 0.7,
+  dancerOn: true,
+  dancerSize: 0.6,
+  dancerEnergy: 1,
+  dancerThickness: 0.035,
   bloom: 0.6,
   trail: 0.1,
 }
@@ -166,5 +178,8 @@ export const PARAM_SPECS: ParamSpec[] = [
   { key: 'blackoutsPerMinute', label: 'Blackouts per minute', group: 'Light', min: 0, max: 20, step: 0.5 },
   { key: 'blackoutLength', label: 'Blackout length (s)', group: 'Light', min: 0.1, max: 3, step: 0.05 },
   { key: 'colourVariety', label: 'Colour variety', group: 'Colour', min: 0, max: 1, step: 0.05 },
+  { key: 'dancerSize', label: 'Size', group: 'Dancer', min: 0.2, max: 1.2, step: 0.05 },
+  { key: 'dancerEnergy', label: 'Energy', group: 'Dancer', min: 0, max: 2, step: 0.05 },
+  { key: 'dancerThickness', label: 'Thickness', group: 'Dancer', min: 0.01, max: 0.08, step: 0.005 },
   { key: 'trail', label: 'Trail', group: 'Light', min: 0, max: 0.8, step: 0.01 },
 ]

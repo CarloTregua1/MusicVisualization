@@ -79,6 +79,19 @@ export function TuningPanel({ params, fps, onChange, onClose }: Props) {
                 </div>
               </div>
             )}
+            {group === 'Dancer' && (
+              <div className="tune-row">
+                <span>Dancer</span>
+                <div className="seg tune-seg" role="group" aria-label="Dancer">
+                  <button aria-pressed={params.dancerOn} onClick={() => onChange({ ...params, dancerOn: true })}>
+                    On
+                  </button>
+                  <button aria-pressed={!params.dancerOn} onClick={() => onChange({ ...params, dancerOn: false })}>
+                    Off
+                  </button>
+                </div>
+              </div>
+            )}
             {PARAM_SPECS.filter((s) => s.group === group)
               // Show only the timing control that applies to the current mode.
               .filter((s) => (s.key === 'songSensitivity' ? params.followSong : s.key === 'tubesPerSecond' ? !params.followSong : true))

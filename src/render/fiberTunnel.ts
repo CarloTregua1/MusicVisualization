@@ -124,6 +124,12 @@ export class FiberTunnel {
   private head = -1
   private count = 0
   private time = 0
+  /**
+   * Where the crater is on screen after the last render, for anything drawn
+   * at its centre (the dancer): centre, rim radius (px), camera roll and the
+   * scene light.
+   */
+  stage = { x: 0, y: 0, rimRadius: 0, roll: 0, rollX: 0, rollY: 0, light: 0 }
   /** Live-tunable look; see tunnelParams.ts. */
   params: TunnelParams = { ...MEASURED_PARAMS }
   /** Brightness of the white tube = the scene's light, 0..1. */
@@ -594,6 +600,20 @@ export class FiberTunnel {
         this.segSpec[i * SEGMENTS + sg] = this.shadeSpec
         this.segEdge[i * SEGMENTS + sg] = this.shadeEdge
       }
+    }
+
+    // The crater's centre and rim on screen, for the dancer.
+    {
+      const proj = (x: number, z: number) => {
+        const dx = x - camX
+        const dy = -camY
+        const dz = z - camZ
+        const zc = Math.max(0.25, dx * fx + dy * fy + dz * fz)
+        return [cx + (focal * (dx * rx + dz * rz)) / zc, cy - (focal * (dx * ux + dy * uy + dz * uz)) / zc]
+      }
+      const [sx, sy] = proj(0, 0)
+      const [ex, ey] = proj(R_RIM, 0)
+      this.stage = { x: sx, y: sy, rimRadius: Math.hypot(ex - sx, ey - sy), roll: this.rollAngle, rollX: cx, rollY: cy, light: this.light }
     }
 
     // Camera roll: tilt the whole view around the screen centre.

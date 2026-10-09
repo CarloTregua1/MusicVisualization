@@ -14,6 +14,7 @@ import { WaveformPanel } from './components/WaveformPanel'
 import { Analyzer } from './dsp/analyze'
 import { resynthesizeTrack, rms, rmsError, synthesize } from './dsp/resynth'
 import { PeakTracker } from './dsp/smoothing'
+import { trackBeats } from './dsp/beats'
 import { analyzeTempo, type TempoTrack } from './dsp/tempo'
 import { readTheme } from './render/canvas'
 import { chainValue, drawEpicycles, Trace } from './render/epicyclesCanvas'
@@ -45,6 +46,7 @@ export default function App() {
   const [view, setView] = useState<'math' | 'visualizer'>('math')
   const [tempo, setTempo] = useState<TempoTrack | null>(null)
   const [tempoProgress, setTempoProgress] = useState(0)
+  const [beats, setBeats] = useState<Float32Array | null>(null)
 
   const settingsRef = useRef(settings)
   useEffect(() => {
@@ -78,6 +80,7 @@ export default function App() {
         player.load(loaded.buffer, file)
         setTempo(null)
         setTempoProgress(0)
+        setBeats(null)
         setAudio(loaded)
       } catch {
         setError(`Couldn't decode “${file.name}”. Try another format.`)
@@ -108,22 +111,28 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [player])
 
-  // Tempo curve for the visualizer, analysed in the background after load.
+  // Tempo curve, then beat times, for the visualizer: analysed in the
+  // background after load, in small slices so the page stays responsive.
   useEffect(() => {
     if (!audio) return
-    const gen = analyzeTempo(audio.mono, audio.sampleRate)
     let timer = 0
-    const step = () => {
-      const until = performance.now() + 10
-      let r = gen.next()
-      while (!r.done && performance.now() < until) r = gen.next()
-      if (r.done) setTempo(r.value)
-      else {
-        setTempoProgress(r.value)
-        timer = window.setTimeout(step, 0)
+    const run = <T,>(gen: Generator<number, T>, onProgress: (p: number) => void, onDone: (v: T) => void) => {
+      const step = () => {
+        const until = performance.now() + 10
+        let r = gen.next()
+        while (!r.done && performance.now() < until) r = gen.next()
+        if (r.done) onDone(r.value)
+        else {
+          onProgress(r.value)
+          timer = window.setTimeout(step, 0)
+        }
       }
+      timer = window.setTimeout(step, 0)
     }
-    timer = window.setTimeout(step, 0)
+    run(analyzeTempo(audio.mono, audio.sampleRate), setTempoProgress, (track) => {
+      setTempo(track)
+      run(trackBeats(track), () => {}, setBeats)
+    })
     return () => window.clearTimeout(timer)
   }, [audio])
 
@@ -290,6 +299,7 @@ export default function App() {
           player={player}
           audio={audio}
           tempo={tempo}
+          beats={beats}
           tempoProgress={tempoProgress}
           playing={playing}
           time={time}

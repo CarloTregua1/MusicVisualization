@@ -14,6 +14,12 @@ export interface TempoTrack {
   step: number
   /** BPM per step (NaN where the track is too quiet to tell). */
   bpm: Float32Array
+  /** The onset envelope it was computed from (reused by the beat tracker). */
+  envelope: Float32Array
+  /** Seconds between envelope frames. */
+  hopSec: number
+  /** Time (s) of envelope frame 0: frames are centred on their FFT window. */
+  envelopeStart: number
 }
 
 /**
@@ -144,7 +150,7 @@ export function* analyzeTempo(
     win.sort((x, y) => x - y)
     bpm[s] = Number.isNaN(raw[s]) || win.length === 0 ? NaN : win[win.length >> 1]
   }
-  return { step, bpm }
+  return { step, bpm, envelope: env, hopSec, envelopeStart: FFT_SIZE / 2 / sampleRate }
 }
 
 /** Runs a generator to completion synchronously (tests, small inputs). */

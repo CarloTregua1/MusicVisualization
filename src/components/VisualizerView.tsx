@@ -6,7 +6,9 @@ import { BandMapper } from '../dsp/bands'
 import { OnsetDetector } from '../dsp/onset'
 import { rms } from '../dsp/resynth'
 import { tempoAt, type TempoTrack } from '../dsp/tempo'
+import { beatPhase } from '../dsp/beats'
 import { Backdrop } from '../render/backdrop'
+import { Dancer, drawDancer } from '../render/dancer'
 import { bpmToTemperature, neon } from '../render/neon'
 import { FiberTunnel, type FiberInput } from '../render/fiberTunnel'
 import { MEASURED_PARAMS, type TunnelParams } from '../render/tunnelParams'
@@ -41,6 +43,8 @@ interface Props {
   player: Player
   audio: LoadedAudio
   tempo: TempoTrack | null
+  /** Beat times (s), once the beat tracker has run. */
+  beats: Float32Array | null
   tempoProgress: number
   playing: boolean
   time: number
@@ -48,7 +52,7 @@ interface Props {
   onExit: () => void
 }
 
-export function VisualizerView({ player, audio, tempo, tempoProgress, playing, time, onSeek, onExit }: Props) {
+export function VisualizerView({ player, audio, tempo, beats, tempoProgress, playing, time, onSeek, onExit }: Props) {
   const root = useRef<HTMLDivElement>(null)
   // Pixel budget keeps big full-screen displays smooth; bloom hides the softness.
   const canvas = useCanvas(1.5, 1.6e6)
@@ -62,9 +66,15 @@ export function VisualizerView({ player, audio, tempo, tempoProgress, playing, t
   const [fps, setFps] = useState(60)
   const paramsRef = useRef(params)
 
+  const beatsRef = useRef(beats)
+
   useEffect(() => {
     tempoRef.current = tempo
   }, [tempo])
+
+  useEffect(() => {
+    beatsRef.current = beats
+  }, [beats])
 
   useEffect(() => {
     paramsRef.current = params
@@ -77,6 +87,7 @@ export function VisualizerView({ player, audio, tempo, tempoProgress, playing, t
     const analyzer = new Analyzer(FFT_SIZE)
     const mapper = new BandMapper(FFT_SIZE, sampleRate)
     const tunnel = new FiberTunnel(mapper.count)
+    const dancer = new Dancer()
     const backdrop = new Backdrop()
     // Sensitive enough to catch softer events (hats, plucks), up to ~5 strings a second.
     const onsets = new OnsetDetector(mapper.count, 0.18, 1.7, 8)
@@ -148,6 +159,52 @@ export function VisualizerView({ player, audio, tempo, tempoProgress, playing, t
       frames++
       backdrop.draw(ctx, dt, { temperature: temp, level: player.playing ? level : 0, beat })
       tunnel.render(ctx)
+
+      // The dancer, standing in the crater, moving on the tracked beats (or on
+      // the BPM until the beat tracker has finished).
+      const pr = paramsRef.current
+      const levels = mapper.levels
+      const n = levels.length
+      const third = Math.floor(n / 3)
+      let lo = 0
+      let hi = 0
+      let sum = 0
+      let weighted = 0
+      for (let i = 0; i < n; i++) {
+        if (i < third) lo += levels[i]
+        else if (i >= 2 * third) hi += levels[i]
+        sum += levels[i]
+        weighted += levels[i] * i
+      }
+      const beatNow = beatsRef.current
+        ? beatPhase(beatsRef.current, t)
+        : (() => {
+            const x = (t * shownBpm) / 60
+            return { index: Math.floor(x), phase: x - Math.floor(x), period: 60 / shownBpm }
+          })()
+      dancer.update(
+        dt,
+        {
+          beat: beatNow,
+          level: player.playing ? level : 0,
+          onset,
+          bass: lo / third,
+          treble: hi / (n - 2 * third),
+          brightness: sum > 1e-6 ? weighted / sum / (n - 1) : 0,
+        },
+        { energy: pr.dancerEnergy },
+      )
+      if (pr.dancerOn) {
+        const st = tunnel.stage
+        drawDancer(
+          ctx,
+          dancer,
+          { x: st.x, y: st.y + st.rimRadius * 0.15, height: pr.dancerSize * st.rimRadius * 2, light: st.light, roll: st.roll, rollX: st.rollX, rollY: st.rollY },
+          temp,
+          pr.colourVariety,
+          pr.dancerThickness,
+        )
+      }
 
       if (now - lastHud > 500) {
         setFps((frames * 1000) / (now - lastHud))
