@@ -80,12 +80,13 @@ export function VisualizerView({ player, audio, tempo, tempoProgress, playing, t
       }
       const level = Math.min(1, Math.max(0, (20 * Math.log10(rms(win) + 1e-9) + 50) / 44))
 
-      // Fibres are emitted only while there is sound; onsets make taller, brighter
-      // ridges. Near the end of the file the window is cut off by zero padding,
-      // which would look like a fake onset.
+      // While playing, a white tube is born 15 times a second and develops from
+      // the sound; its brightness (the scene's light) follows the loudness, so
+      // silence goes dark. Near the end of the file the window is cut off by
+      // zero padding, which would look like a fake onset.
       const inside = center + FFT_SIZE / 2 <= mono.length
       const onset = player.playing && inside ? onsets.update(mapper.levels, t) : 0
-      const sounding = player.playing && inside && level > 0.1
+      const sounding = player.playing && inside
       beat = Math.max(onset, beat * Math.exp(-realDt * 6))
 
       const track = tempoRef.current

@@ -1,23 +1,23 @@
 import { RollCamera } from './camera'
 
-/** Upper bound on fibres alive at once. */
-const MAX_FIBERS = 200
+/** Upper bound on tubes alive at once (15/s × the longest lifetime, with room to spare). */
+const MAX_TUBES = 160
 const POINTS = 160
-/** Each fibre is stroked as this many arcs, so its colour can follow the spectrum around it. */
-const SEGMENTS = 12
-/** Fibres emitted per second while sound is present: calm, not a blizzard. */
-const EMIT_RATE = 24
-/** Camera-space depths: fibres are born at Z_FAR (the hollow) and die past Z_NEAR. */
-const Z_FAR = 6
+/** Each tube is shaded in this many arcs, so its lighting and colour vary along it. */
+const SEGMENTS = 6
+/** Tubes born per second: each spends 1/TUBE_RATE s developing as the white innermost tube. */
+const TUBE_RATE = 15
+/** Camera-space depths: tubes develop at Z_FAR (the hollow) and die past Z_NEAR. */
+const Z_FAR = 3.3
 const Z_NEAR = 0.35
-/** Time constant (s) of the spectrum smoothing between consecutive fibres: neighbours stack like contours. */
-const COHERENCE = 0.1
-/** Camera height above the tunnel axis: near fibres swing down into a floor. */
+/** Time constant (s) of the spectrum smoothing, so consecutive tubes stack coherently. */
+const COHERENCE = 0.06
+/** Camera height above the tunnel axis: near tubes swing down into a floor. */
 const CAMERA_HEIGHT = 0.5
-/** Minimum on-screen gap between a fibre and the newer one inside it, as a fraction of their natural spacing. */
-const MIN_GAP = 0.45
-/** Height of the tallest walls, in tunnel radii above the plain loop. */
-const WALL_HEIGHT = 4.5
+/** World radius of a tube's cross-section, in tunnel radii. */
+const TUBE_RADIUS = 0.0045
+/** Height of the tallest walls, in tunnel radii. Walls grow straight up. */
+const WALL_HEIGHT = 4.2
 /** Walls rise only where a band beats the mean of its ±WALL_SPAN neighbours (a spectral peak). */
 const WALL_SPAN = 4
 /** A band must beat its neighbours by this much before any wall rises… */
@@ -26,33 +26,33 @@ const WALL_MIN_CONTRAST = 0.04
 const WALL_CONTRAST = 0.16
 /** Bell weights used to spread each peak over its neighbours, so walls are rounded curtains. */
 const WALL_SPREAD = [1, 3, 5, 6, 5, 3, 1]
-/** Wall height on the floor relative to the top of the tunnel. */
-const FLOOR_WALLS = 0.3
-/** The innermost fibres, up to this age, burn white-hot like the reference's rim. */
-const WHITE_AGE = 0.08
-/** Main light at the hollow: brightness falls off over this distance (tunnel radii). */
+/** After its development, a tube fades from white to its colour over this long (s). */
+const COOL_TIME = 0.12
+/** Light from the white tube falls off over this distance (tunnel radii). */
 const LIGHT_FALLOFF = 3.4
+/** How quickly the scene light follows the music (s): silence goes dark almost at once. */
+const LIGHT_RESPONSE = 0.08
+/** Light that remains when the white tube is dark: practically none. */
+const AMBIENT = 0.05
 /** Bloom is computed at this fraction of the canvas size (downscale = cheap blur). */
 const BLOOM_SCALE = 0.25
 
-interface Fiber {
+interface Tube {
   bands: Float32Array
+  /** Wall lift per band, 0..1: how strongly each band is a loud spectral peak. */
+  peaks: Float32Array
   level: number
-  /** Onset strength at birth, 0..1: taller, brighter ridges. */
+  /** Onset strength during development, 0..1: taller walls. */
   onset: number
   temperature: number
   /** Depth in camera space. */
   z: number
-  /** Small per-fibre variation so neighbouring fibres don't coincide exactly. */
+  /** Seconds since birth. Development lasts 1/TUBE_RATE s; then the tube cools and travels. */
+  age: number
+  /** Small per-tube variation so neighbouring tubes don't coincide exactly. */
   jitter: number
-  /** Slowly varying phase for the fine thread detail: neighbours stay similar, so they bundle. */
-  phase: number
-  /** Treble energy, scales the fine detail. */
-  treble: number
-  /** Rotation of the spectrum mapping at birth: successive fibres turn, so the stack swirls. */
+  /** Rotation of the spectrum layout: successive tubes turn slowly, so the stack swirls. */
   turn: number
-  /** Wall lift per band, 0..1: how strongly each band is a loud spectral peak. */
-  peaks: Float32Array
 }
 
 export interface FiberInput {
@@ -70,69 +70,63 @@ const smooth = (e0: number, e1: number, x: number) => {
 }
 
 /**
- * Lit fibre colour. Age drives the hue ramp, as in the reference: the newest
- * fibres are pink, older ones cool through purple and blue to teal. Tempo
- * shifts the whole ramp colder or hotter, and the position around the
- * spectrum tints it, so frequencies still read as different hues.
- * `light` (from the lighting model) sets the brightness, `spec` adds a
- * white glint, and `white` (1 for the innermost fibres) burns to white-hot.
+ * Tube colour. Depth drives the hue ramp, as in the reference: tubes just
+ * out of development are pink, older ones cool through purple and blue to
+ * teal. Tempo shifts the ramp colder or hotter, and the position around the
+ * spectrum tints it. `light` sets the brightness; `white` (1 while
+ * developing) burns it to white.
  */
-function litColor(
-  temperature: number,
-  age: number,
-  pos: number,
-  tint: number,
-  light: number,
-  spec: number,
-  white: number,
-): string {
-  const hue = 320 - 135 * age + (temperature - 0.5) * 110 + (pos - 0.5) * 36 + tint
-  let l = 12 + 50 * light + 30 * spec
-  l = l + (96 - l) * white
-  const lightness = Math.min(96, Math.max(8, l))
-  const sat = Math.max(0, 100 - 75 * white - 45 * Math.min(1, spec))
+function tubeColor(temperature: number, depth: number, pos: number, tint: number, light: number, white: number): string {
+  const hue = 320 - 135 * depth + (temperature - 0.5) * 110 + (pos - 0.5) * 36 + tint
+  let l = 4 + 54 * light
+  l += (97 - l) * white
+  const lightness = Math.min(97, Math.max(2, l))
+  const sat = 100 - 80 * white
   return `hsl(${(((hue % 360) + 360) % 360).toFixed(0)}, ${sat.toFixed(0)}%, ${lightness.toFixed(0)}%)`
 }
 
 /**
- * Light-painting tunnel, modelled on the reference video. Each fibre is a
- * thin glowing loop holding one moment of the spectrum around the circle
- * (bass at the top, treble at the bottom, mirrored left/right). Fibres are
- * emitted only while there is sound, born at the far end around the hollow,
- * and drift slowly toward the camera, so the hollow's rim is always the
- * latest sound. Loud bands rise outward into tall walls over the top and
- * sides, while the floor below stays calm, as in the reference; the camera
- * sits above the axis so older fibres form that floor.
+ * Tunnel of glowing tubes, following the reference's behaviour:
+ *
+ * 1. A tube is born at the innermost position, glowing white.
+ * 2. While white, it develops its shape from the sound of that moment; the
+ *    shape grows vertically (straight up), not outward.
+ * 3. After 1/15 s it is done: it takes its colour, moves to the next
+ *    position out, and a new white tube is born inside it.
+ * 4. The white tube is the scene's light. Its brightness follows the music,
+ *    so when the music stops it goes dark and so does everything.
+ *
+ * Tubes are drawn as shaded cylinders (dark edge, lit body, highlight on
+ * the side facing the light), far to near, with older tubes stacked above
+ * newer ones so walls become vertical curtains of tubes.
  */
 export class FiberTunnel {
-  private readonly fibers: Fiber[]
+  private readonly tubes: Tube[]
   private head = -1
   private count = 0
-  private emitAcc = 0
   private time = 0
-  private serial = 0
-  /** Decaying flash from onsets, brightens the whole structure. */
-  private flash = 0
+  /** Brightness of the white tube = the scene's light, 0..1. */
+  private light = 0
   /** Slow left/right camera roll; this frame's angle in radians. */
   private readonly roll = new RollCamera()
   private rollAngle = 0
+  /** Spectrum smoothed over time; tubes develop from this, not the raw frame. */
+  private readonly smoothBands: Float32Array
   /** Scratch: raw per-band peak strength before spreading. */
   private readonly rawPeaks: Float32Array
-  /** Spectrum smoothed over time; fibres are emitted from this, not the raw frame. */
-  private smoothBands: Float32Array
   private readonly pos: Float32Array
-  /** Wall height factor per point: full over the top, FLOOR_WALLS on the floor. */
+  /** Wall height factor per point: full over the top and sides, none on the floor. */
   private readonly wallWeight: Float32Array
   private readonly cos: Float32Array
   private readonly sin: Float32Array
-  // This frame's fibre geometry (by live index) and per-point loudness.
-  private readonly xs = new Float32Array(MAX_FIBERS * POINTS)
-  private readonly ys = new Float32Array(MAX_FIBERS * POINTS)
-  private readonly vs = new Float32Array(MAX_FIBERS * POINTS)
-  /** World-space radius per point (tunnel radii), for lighting. */
-  private readonly wr = new Float32Array(MAX_FIBERS * POINTS)
-  /** Screen radius of the newer neighbour at each angle, for the no-crossing rule. */
-  private readonly inner = new Float32Array(POINTS)
+  // This frame's geometry by live index: screen points, world points (for lighting), loudness.
+  private readonly xs = new Float32Array(MAX_TUBES * POINTS)
+  private readonly ys = new Float32Array(MAX_TUBES * POINTS)
+  private readonly wx = new Float32Array(MAX_TUBES * POINTS)
+  private readonly wy = new Float32Array(MAX_TUBES * POINTS)
+  /** Scratch: one tube's points shifted toward the light, for its highlight. */
+  private readonly hlX = new Float32Array(POINTS)
+  private readonly hlY = new Float32Array(POINTS)
   private readonly layer: HTMLCanvasElement
   private readonly trail: HTMLCanvasElement
   private readonly bloom: HTMLCanvasElement
@@ -141,18 +135,19 @@ export class FiberTunnel {
   private bloomCtx: CanvasRenderingContext2D | null = null
 
   constructor(bandCount: number) {
-    this.fibers = Array.from({ length: MAX_FIBERS }, () => ({
+    this.tubes = Array.from({ length: MAX_TUBES }, () => ({
       bands: new Float32Array(bandCount),
+      peaks: new Float32Array(bandCount),
       level: 0,
       onset: 0,
       temperature: 0.5,
       z: Z_FAR,
+      age: 0,
       jitter: 0,
-      phase: 0,
-      treble: 0,
       turn: 0,
-      peaks: new Float32Array(bandCount),
     }))
+    this.smoothBands = new Float32Array(bandCount)
+    this.rawPeaks = new Float32Array(bandCount)
     this.pos = new Float32Array(POINTS)
     this.wallWeight = new Float32Array(POINTS)
     this.cos = new Float32Array(POINTS)
@@ -165,11 +160,9 @@ export class FiberTunnel {
       // goes there, raising walls over the top; quieter treble lines the floor.
       const fromTop = Math.abs(((th - 1.5 * Math.PI + 3 * Math.PI) % (2 * Math.PI)) - Math.PI)
       this.pos[i] = fromTop / Math.PI
-      // −sin θ is 1 at the top, −1 at the bottom.
-      this.wallWeight[i] = FLOOR_WALLS + (1 - FLOOR_WALLS) * (0.5 - 0.5 * Math.sin(th))
+      // −sin θ is 1 at the top, 0 at the sides, −1 at the bottom.
+      this.wallWeight[i] = smooth(-0.6, 0.3, -this.sin[i])
     }
-    this.smoothBands = new Float32Array(bandCount)
-    this.rawPeaks = new Float32Array(bandCount)
     this.layer = document.createElement('canvas')
     this.trail = document.createElement('canvas')
     this.bloom = document.createElement('canvas')
@@ -180,179 +173,95 @@ export class FiberTunnel {
     this.trailCtx?.clearRect(0, 0, this.trail.width, this.trail.height)
   }
 
-  /** i-th live fibre, oldest (nearest the camera) first. */
-  private fiber(i: number): Fiber {
-    return this.fibers[(this.head - this.count + 1 + i + MAX_FIBERS * 2) % MAX_FIBERS]
+  /** i-th live tube, oldest (nearest the camera) first; the last one is the white tube. */
+  private tube(i: number): Tube {
+    return this.tubes[(this.head - this.count + 1 + i + MAX_TUBES * 2) % MAX_TUBES]
   }
 
   /**
-   * Advances by dt. Fibres are emitted only while `sounding`; an `onset` > 0
-   * marks the next fibre as an onset ridge and flashes the structure.
-   * `lifetime` is the drift time from the hollow to the camera.
+   * Advances by dt. While `playing`, a new white tube is born every 1/15 s and
+   * the previous one leaves the centre. `lifetime` is the travel time from
+   * the hollow to the camera.
    */
-  update(dt: number, input: FiberInput, sounding: boolean, onset: number, lifetime: number) {
+  update(dt: number, input: FiberInput, playing: boolean, onset: number, lifetime: number) {
     this.time += dt
     this.rollAngle = this.roll.update(dt)
-    this.flash = Math.max(onset, this.flash * Math.exp(-dt * 5))
-    // Smooth the spectrum over time so consecutive fibres are near-identical
-    // and stack into parallel contours; an onset breaks through halfway.
+    // The scene light is the white tube's brightness, which follows the music.
+    const target = playing ? input.level : 0
+    this.light += (target - this.light) * (1 - Math.exp(-dt / LIGHT_RESPONSE))
+
     const a = 1 - Math.exp(-dt / COHERENCE)
     const sb = this.smoothBands
-    for (let i = 0; i < sb.length; i++) {
-      const b = input.bands[i]
-      sb[i] = onset > 0 ? sb[i] + (Math.max(sb[i], b) - sb[i]) * 0.5 : sb[i] + (b - sb[i]) * a
-    }
-    // Travel in log-depth so on-screen spacing stays even as fibres approach.
+    for (let i = 0; i < sb.length; i++) sb[i] += (input.bands[i] - sb[i]) * a
+
+    // Finished tubes travel outward in log-depth (even spacing on screen);
+    // the developing white tube stays at the centre.
     const k = Math.log(Z_FAR / Z_NEAR) / lifetime
     const shrink = Math.exp(-k * dt)
-    for (let i = 0; i < this.count; i++) this.fiber(i).z *= shrink
-    while (this.count > 0 && this.fiber(0).z <= Z_NEAR) this.count--
+    const develop = 1 / TUBE_RATE
+    for (let i = 0; i < this.count; i++) {
+      const t = this.tube(i)
+      t.age += dt
+      if (i < this.count - 1 || t.age > develop) t.z *= shrink
+    }
+    while (this.count > 0 && this.tube(0).z <= Z_NEAR) this.count--
 
-    if (!sounding) {
-      this.emitAcc = 0
-      return
-    }
-    // An onset emits immediately, so the hit lands on its own fibre.
-    if (onset > 0) {
-      this.emit(input, onset, Z_FAR)
-      this.emitAcc = 0
-      return
-    }
-    this.emitAcc += dt
-    while (this.emitAcc >= 1 / EMIT_RATE) {
-      this.emitAcc -= 1 / EMIT_RATE
-      this.emit(input, 0, Z_FAR * Math.exp(-k * this.emitAcc))
-    }
+    if (!playing) return
+    const headTube = this.count > 0 ? this.tube(this.count - 1) : null
+    if (!headTube || headTube.age >= develop) this.birth(input)
+    // The white tube keeps developing: it holds the loudest moment of its window.
+    this.develop(this.tube(this.count - 1), input, onset)
   }
 
-  private emit(input: FiberInput, onset: number, z: number) {
-    if (this.count === MAX_FIBERS) this.count--
-    this.head = (this.head + 1) % MAX_FIBERS
+  private birth(input: FiberInput) {
+    if (this.count === MAX_TUBES) this.count--
+    this.head = (this.head + 1) % MAX_TUBES
     this.count++
-    const f = this.fibers[this.head]
-    // Light blur across bands keeps the ridges organic rather than stepped.
-    const b = this.smoothBands
-    const n = b.length
+    const t = this.tubes[this.head]
+    t.bands.fill(0)
+    t.level = 0
+    t.onset = 0
+    t.temperature = input.temperature
+    t.z = Z_FAR
+    t.age = 0
+    t.jitter = ((this.head * 0.618034) % 1) - 0.5
+    t.turn = 0.45 * Math.sin(this.time * 0.07) + 0.15 * Math.sin(this.time * 0.19 + 1)
+  }
+
+  private develop(t: Tube, input: FiberInput, onset: number) {
+    const n = t.bands.length
+    const sb = this.smoothBands
+    // Light blur across bands keeps the shape organic; keep the peak of the window.
     for (let i = 0; i < n; i++) {
-      f.bands[i] = 0.25 * b[Math.max(0, i - 1)] + 0.5 * b[i] + 0.25 * b[Math.min(n - 1, i + 1)]
+      const v = 0.25 * sb[Math.max(0, i - 1)] + 0.5 * sb[i] + 0.25 * sb[Math.min(n - 1, i + 1)]
+      if (v > t.bands[i]) t.bands[i] = v
     }
+    t.level = Math.max(t.level, input.level)
+    t.onset = Math.max(t.onset, onset)
+    t.temperature = input.temperature
     // Walls rise at spectral peaks only: bands clearly louder than their
-    // neighbours (notes, harmonics), and loud in absolute terms too. Broad loud
-    // regions stay flat, so walls come out as narrow curtains, not a dome.
+    // neighbours, and loud in absolute terms. Spread with a bell so walls are
+    // rounded curtains, not spikes.
     for (let i = 0; i < n; i++) {
       let sum = 0
       let cnt = 0
       for (let j = Math.max(0, i - WALL_SPAN); j <= Math.min(n - 1, i + WALL_SPAN); j++) {
-        sum += f.bands[j]
+        sum += t.bands[j]
         cnt++
       }
-      const contrast = f.bands[i] - sum / cnt - WALL_MIN_CONTRAST
-      const loud = smooth(0.25, 0.6, f.bands[i])
-      this.rawPeaks[i] = Math.min(1, Math.max(0, contrast / WALL_CONTRAST)) * loud
+      const contrast = t.bands[i] - sum / cnt - WALL_MIN_CONTRAST
+      this.rawPeaks[i] = Math.min(1, Math.max(0, contrast / WALL_CONTRAST)) * smooth(0.25, 0.6, t.bands[i])
     }
-    // Spread each peak with a bell so it rises as a rounded curtain, not a spike;
-    // the max keeps a peak's own height while its shoulders fall off smoothly.
     const half = WALL_SPREAD.length >> 1
     const top = WALL_SPREAD[half]
     for (let i = 0; i < n; i++) {
       let m = 0
-      for (let k = -half; k <= half; k++) {
-        const j = i + k
-        if (j >= 0 && j < n) m = Math.max(m, this.rawPeaks[j] * (WALL_SPREAD[k + half] / top))
+      for (let q = -half; q <= half; q++) {
+        const j = i + q
+        if (j >= 0 && j < n) m = Math.max(m, this.rawPeaks[j] * (WALL_SPREAD[q + half] / top))
       }
-      f.peaks[i] = m
+      t.peaks[i] = m
     }
-    f.level = input.level
-    f.onset = onset
-    f.temperature = input.temperature
-    f.z = z
-    let tr = 0
-    const from = Math.floor(n * 0.55)
-    for (let i = from; i < n; i++) tr += f.bands[i]
-    f.treble = tr / (n - from)
-    f.phase = this.serial * 0.05 + this.time * 0.2
-    // Slow, wandering rotation: breaks the mirror symmetry into a swirl.
-    f.turn = 0.45 * Math.sin(this.time * 0.07) + 0.15 * Math.sin(this.time * 0.19 + 1)
-    // Low-discrepancy jitter: consecutive fibres get well-spread offsets.
-    f.jitter = ((this.serial++ * 0.618034) % 1) - 0.5
-  }
-
-  /** World position of point p on live fibre i: (x, y) across the tunnel, z along it. */
-  private world(i: number, p: number, out: Float32Array) {
-    const k = ((p % POINTS) + POINTS) % POINTS
-    const r = this.wr[i * POINTS + k]
-    out[0] = r * this.cos[k]
-    out[1] = r * this.sin[k]
-    out[2] = this.fiber(i).z
-  }
-
-  private readonly w0 = new Float32Array(3)
-  private readonly w1 = new Float32Array(3)
-  private readonly w2 = new Float32Array(3)
-
-  /**
-   * Lighting for point p of live fibre i, treating the fibres as samples of a
-   * 3D surface. Its normal comes from the tangent along the fibre and the step
-   * to the neighbouring fibre `nb`. The main light sits in the hollow (the far
-   * end of the tunnel), so surfaces facing it glow and brightness falls off
-   * toward the camera; a specular glint and a rim term make silhouettes catch
-   * the light.
-   */
-  private shade(i: number, nb: number, p: number, z: number): { light: number; spec: number } {
-    const { w0, w1, w2 } = this
-    this.world(i, p - 1, w0)
-    this.world(i, p + 1, w1)
-    const ax = w1[0] - w0[0]
-    const ay = w1[1] - w0[1]
-    const az = w1[2] - w0[2]
-    this.world(nb, p, w0)
-    this.world(i, p, w2)
-    const bx = w0[0] - w2[0]
-    const by = w0[1] - w2[1]
-    const bz = w0[2] - w2[2]
-    let nx = ay * bz - az * by
-    let ny = az * bx - ax * bz
-    let nz = ax * by - ay * bx
-    const nl = Math.hypot(nx, ny, nz) || 1
-    nx /= nl
-    ny /= nl
-    nz /= nl
-    // Face the inside of the tunnel (toward its axis).
-    const k = ((p % POINTS) + POINTS) % POINTS
-    if (-(nx * this.cos[k] + ny * this.sin[k]) < 0) {
-      nx = -nx
-      ny = -ny
-      nz = -nz
-    }
-    const [px, py] = w2
-    // Main light: the hollow.
-    let lx = -px
-    let ly = -py
-    let lz = Z_FAR - z
-    const dist = Math.hypot(lx, ly, lz) || 1
-    lx /= dist
-    ly /= dist
-    lz /= dist
-    const atten = 1 / (1 + (dist / LIGHT_FALLOFF) ** 2)
-    const diffuse = Math.max(0, nx * lx + ny * ly + nz * lz)
-    // View direction: toward the camera, which sits above the tunnel axis.
-    let vx = -px
-    let vy = -CAMERA_HEIGHT - py
-    let vz = -z
-    const vl = Math.hypot(vx, vy, vz) || 1
-    vx /= vl
-    vy /= vl
-    vz /= vl
-    let hx = lx + vx
-    let hy = ly + vy
-    let hz = lz + vz
-    const hl = Math.hypot(hx, hy, hz) || 1
-    hx /= hl
-    hy /= hl
-    hz /= hl
-    const spec = Math.pow(Math.max(0, nx * hx + ny * hy + nz * hz), 24) * atten * 2
-    const rim = Math.pow(1 - Math.abs(nx * vx + ny * vy + nz * vz), 3)
-    return { light: 0.32 + 1.7 * diffuse * atten + 0.35 * rim, spec }
   }
 
   private ensureLayers(W: number, H: number) {
@@ -373,7 +282,52 @@ export class FiberTunnel {
     this.bloomCtx ??= this.bloom.getContext('2d')
   }
 
-  /** Draws the fibre layer onto `ctx`, over whatever background is already there. */
+  /**
+   * Lighting at point p of live tube i from the white tube's light, treating
+   * the tubes as samples of a surface: the normal comes from the tangent
+   * along the tube and the step to the neighbouring tube `nb`.
+   */
+  private shade(i: number, nb: number, p: number): number {
+    const P = POINTS
+    const o = i * P
+    const p0 = (p - 1 + P) % P
+    const p1 = (p + 1) % P
+    const zi = this.tube(i).z
+    const ax = this.wx[o + p1] - this.wx[o + p0]
+    const ay = this.wy[o + p1] - this.wy[o + p0]
+    const az = 0
+    const bx = this.wx[nb * P + p] - this.wx[o + p]
+    const by = this.wy[nb * P + p] - this.wy[o + p]
+    const bz = this.tube(nb).z - zi
+    let nx = ay * bz - az * by
+    let ny = az * bx - ax * bz
+    let nz = ax * by - ay * bx
+    const nl = Math.hypot(nx, ny, nz) || 1
+    nx /= nl
+    ny /= nl
+    nz /= nl
+    const px = this.wx[o + p]
+    const py = this.wy[o + p]
+    // Face the inside of the tunnel (toward its axis).
+    if (nx * px + ny * py > 0) {
+      nx = -nx
+      ny = -ny
+      nz = -nz
+    }
+    // The light: the white tube at the far end of the tunnel.
+    let lx = -px
+    let ly = -py
+    let lz = Z_FAR - zi
+    const dist = Math.hypot(lx, ly, lz) || 1
+    lx /= dist
+    ly /= dist
+    lz /= dist
+    const atten = 1 / (1 + (dist / LIGHT_FALLOFF) ** 2)
+    const diffuse = 0.35 + 0.65 * Math.max(0, nx * lx + ny * ly + nz * lz)
+    return AMBIENT + this.light * 1.9 * diffuse * atten
+  }
+
+  /** Draws the tube layer onto `ctx`, over whatever background is already there. */
   render(ctx: CanvasRenderingContext2D) {
     const W = ctx.canvas.width
     const H = ctx.canvas.height
@@ -385,8 +339,7 @@ export class FiberTunnel {
     const cx = W / 2
     const cy = H / 2
     const reach = Math.hypot(W, H) / 2
-    const px = Math.min(W, H) / 900
-    // Focal length: a plain fibre at Z_NEAR just overfills the screen.
+    // Focal length: a plain tube at Z_NEAR just overfills the screen.
     const focal = reach * 1.15 * Z_NEAR
 
     lc.setTransform(1, 0, 0, 1, 0, 0)
@@ -394,139 +347,15 @@ export class FiberTunnel {
     lc.globalAlpha = 1
     lc.clearRect(0, 0, W, H)
 
-    // A soft trail: last frame, pushed outward a touch and faded.
+    // A faint trail: last frame, pushed outward a touch.
     lc.save()
     lc.translate(cx, cy)
     lc.scale(1.006, 1.006)
-    lc.globalAlpha = 0.12
+    lc.globalAlpha = 0.1
     lc.drawImage(this.trail, -cx, -cy, W, H)
     lc.restore()
 
-    // The camera sits above the tunnel axis (and drifts a little sideways), so
-    // by perspective near fibres swing down into a floor while the far hollow
-    // stays put; the view is aimed a touch up to keep the hollow framed.
-    const camX = 0.12 * Math.sin(this.time * 0.11)
-    const camY = CAMERA_HEIGHT + 0.08 * Math.sin(this.time * 0.08 + 1.3)
-    const aimY = -0.06 * H
-
-    lc.globalCompositeOperation = 'lighter'
-    lc.lineJoin = 'round'
-    lc.lineCap = 'round'
-    const last = this.fibers[0].bands.length - 1
-    const logSpan = Math.log(Z_FAR / Z_NEAR)
-    const { xs, ys, vs, inner } = this
-
-    // Geometry, newest (innermost) first. Each fibre is kept just outside the
-    // newer one at every angle, so the stack never crosses: a tower on a fresh
-    // fibre lifts every older fibre over it into a wall of nested contours.
-    let innerS = 0
-    for (let i = this.count - 1; i >= 0; i--) {
-      const f = this.fiber(i)
-      const z = f.z
-      const amp = (0.4 + 0.6 * f.level) * (1 + 0.5 * f.onset)
-      // A whisper of thread detail, shared by neighbours so it never looks noisy.
-      const fine = (0.003 + 0.01 * f.treble) * amp
-      const ph = f.phase
-      const s = focal / z
-      // Rotate the fibre's spectrum layout by its birth turn (in whole points).
-      const shift = Math.round((f.turn / (2 * Math.PI)) * POINTS)
-      const ox = cx - camX * s
-      const oy = cy + aimY + camY * s
-      const gap = i === this.count - 1 ? 0 : Math.max(1.1 * px, MIN_GAP * (s - innerS))
-      const o = i * POINTS
-      for (let p = 0; p < POINTS; p++) {
-        const q = this.pos[(p + shift + POINTS * 4) % POINTS] * last
-        const k0 = q | 0
-        const t = q - k0
-        const v = f.bands[k0] * (1 - t) + f.bands[Math.min(last, k0 + 1)] * t
-        const th = (p / POINTS) * 2 * Math.PI
-        const ripple = 0.6 * Math.sin(9 * th + ph * 3.1) + 0.4 * Math.sin(17 * th - ph * 4.7 + 1.3)
-        // Spectral peaks rise outward into tall, narrow walls; elsewhere the
-        // fibre stays a calm loop.
-        const lift = f.peaks[k0] * (1 - t) + f.peaks[Math.min(last, k0 + 1)] * t
-        // Smoothstep profile: rounded shoulders and a rounded crest.
-        const shape = lift * lift * (3 - 2 * lift)
-        const r = 1 + WALL_HEIGHT * shape * amp * this.wallWeight[p] + fine * ripple
-        let rho = r * s
-        if (i !== this.count - 1 && rho < inner[p] + gap) rho = inner[p] + gap
-        inner[p] = rho
-        xs[o + p] = ox + rho * this.cos[p]
-        ys[o + p] = oy + rho * this.sin[p]
-        vs[o + p] = v
-        this.wr[o + p] = rho / s
-      }
-      innerS = s
-    }
-
-    // Camera roll: tilt the whole tunnel around the screen centre.
-    const rc = Math.cos(this.rollAngle)
-    const rs = Math.sin(this.rollAngle)
-    lc.setTransform(rc, rs, -rs, rc, cx - cx * rc + cy * rs, cy - cx * rs - cy * rc)
-
-    // Draw, oldest first.
-    for (let i = 0; i < this.count; i++) {
-      const f = this.fiber(i)
-      const z = f.z
-      // 0 = just born at the hollow, 1 = reaching the camera.
-      const age = Math.log(Z_FAR / z) / logSpan
-      const alpha = smooth(0, 0.03, age) * (1 - smooth(0.82, 1, age)) * (0.75 + 0.25 * f.level) * (1 + 0.4 * this.flash)
-      if (alpha < 0.01) continue
-      const shift = Math.round((f.turn / (2 * Math.PI)) * POINTS)
-      const o = i * POINTS
-      lc.globalAlpha = Math.min(1, alpha)
-      // Crisp lines; fibres born on a hit are thicker accents.
-      lc.lineWidth = Math.max(0.8, (1.0 * px) / Math.pow(z, 0.7)) * (1 + 0.8 * f.onset)
-      // Each fibre gets its own slight hue, so neighbours stay distinguishable.
-      const tint = f.jitter * 16
-      // The innermost fibres burn white-hot, with a pink glow around them.
-      const white = 1 - smooth(0, WHITE_AGE, age)
-      if (white > 0.05) {
-        lc.beginPath()
-        lc.moveTo(xs[o], ys[o])
-        for (let p = 1; p < POINTS; p++) lc.lineTo(xs[o + p], ys[o + p])
-        lc.closePath()
-        const lw = lc.lineWidth
-        lc.strokeStyle = litColor(f.temperature, 0, 0.5, 0, 1.1, 0, 0)
-        lc.globalAlpha = Math.min(1, alpha) * 0.3 * white
-        lc.lineWidth = lw * 6
-        lc.stroke()
-        lc.lineWidth = lw
-        lc.globalAlpha = Math.min(1, alpha)
-      }
-      // Neighbour fibre used for the surface's second tangent (across fibres).
-      const nb = i + 1 < this.count ? i + 1 : i - 1
-      for (let sg = 0; sg < SEGMENTS; sg++) {
-        // Integer bounds: POINTS needn't be a multiple of SEGMENTS.
-        const a = Math.round((sg * POINTS) / SEGMENTS)
-        const b = Math.round(((sg + 1) * POINTS) / SEGMENTS)
-        // Brightness follows this fibre's own loudness along the segment.
-        let e = 0
-        for (let p = a; p < b; p++) e += vs[o + (p % POINTS)]
-        e = e / (b - a) + f.onset * 0.6 + this.flash * 0.3
-        const pc = (a + b) >> 1
-        const { light, spec } = nb >= 0 ? this.shade(i, nb, pc, z) : { light: 0.8, spec: 0 }
-        lc.strokeStyle = litColor(
-          f.temperature,
-          age,
-          this.pos[(pc + shift + POINTS * 4) % POINTS],
-          tint,
-          light * (0.75 + 0.35 * e),
-          spec,
-          white,
-        )
-        lc.beginPath()
-        // Smooth curve: each point is a control point, passing through the
-        // midpoints between points. Segments join exactly where they meet.
-        const prev = o + ((a - 1 + POINTS) % POINTS)
-        lc.moveTo((xs[prev] + xs[o + a]) / 2, (ys[prev] + ys[o + a]) / 2)
-        for (let p = a; p < b; p++) {
-          const i0 = o + (p % POINTS)
-          const i1 = o + ((p + 1) % POINTS)
-          lc.quadraticCurveTo(xs[i0], ys[i0], (xs[i0] + xs[i1]) / 2, (ys[i0] + ys[i1]) / 2)
-        }
-        lc.stroke()
-      }
-    }
+    if (this.count > 0) this.drawTubes(lc, cx, cy, focal, H)
 
     lc.setTransform(1, 0, 0, 1, 0, 0)
     tc.globalCompositeOperation = 'copy'
@@ -545,9 +374,150 @@ export class FiberTunnel {
     bc.drawImage(this.layer, 0, 0, this.bloom.width, this.bloom.height)
     ctx.imageSmoothingEnabled = true
     ctx.globalCompositeOperation = 'lighter'
-    ctx.globalAlpha = 0.28 + 0.25 * this.flash
+    ctx.globalAlpha = 0.25 + 0.35 * this.light
     ctx.drawImage(this.bloom, 0, 0, W, H)
     ctx.globalAlpha = 1
     ctx.globalCompositeOperation = 'source-over'
+  }
+
+  private drawTubes(lc: CanvasRenderingContext2D, cx: number, cy: number, focal: number, H: number) {
+    const camX = 0.12 * Math.sin(this.time * 0.11)
+    const camY = CAMERA_HEIGHT + 0.08 * Math.sin(this.time * 0.08 + 1.3)
+    const aimY = -0.06 * H
+    const last = this.tubes[0].bands.length - 1
+    const logSpan = Math.log(Z_FAR / Z_NEAR)
+    const develop = 1 / TUBE_RATE
+    const { xs, ys, wx, wy } = this
+    const P = POINTS
+
+    // Geometry. Sound lifts a tube straight up; consecutive tubes develop
+    // from similar sound, so their walls layer into vertical curtains.
+    for (let i = this.count - 1; i >= 0; i--) {
+      const t = this.tube(i)
+      const z = t.z
+      const s = focal / z
+      const growth = smooth(0, develop, t.age)
+      const amp = (0.4 + 0.6 * t.level) * (1 + 0.5 * t.onset) * growth
+      const shift = Math.round((t.turn / (2 * Math.PI)) * P)
+      const ox = cx - camX * s
+      const oy = cy + aimY + camY * s
+      const o = i * P
+      for (let p = 0; p < P; p++) {
+        const q = this.pos[(p + shift + P * 4) % P] * last
+        const k0 = q | 0
+        const f = q - k0
+        const lift = t.peaks[k0] * (1 - f) + t.peaks[Math.min(last, k0 + 1)] * f
+        const shape = lift * lift * (3 - 2 * lift)
+        const r = 1 + 0.004 * t.jitter
+        const h = WALL_HEIGHT * shape * amp * this.wallWeight[p]
+        const x = ox + r * this.cos[p] * s
+        const y = oy + (r * this.sin[p] - h) * s
+        xs[o + p] = x
+        ys[o + p] = y
+        wx[o + p] = r * this.cos[p]
+        wy[o + p] = (y - oy) / s
+      }
+    }
+
+    // Camera roll: tilt the whole tunnel around the screen centre.
+    const rc = Math.cos(this.rollAngle)
+    const rs = Math.sin(this.rollAngle)
+    lc.setTransform(rc, rs, -rs, rc, cx - cx * rc + cy * rs, cy - cx * rs - cy * rc)
+    lc.lineJoin = 'round'
+    lc.lineCap = 'round'
+
+    // Draw far to near: the white tube first, the nearest tube last, so nearer
+    // tubes pass in front of farther ones like real cylinders.
+    for (let i = this.count - 1; i >= 0; i--) {
+      const t = this.tube(i)
+      const z = t.z
+      const depth = Math.log(Z_FAR / z) / logSpan
+      const fade = 1 - smooth(0.85, 1, depth)
+      if (fade < 0.01) continue
+      const o = i * P
+      const shift = Math.round((t.turn / (2 * Math.PI)) * P)
+      const s = focal / z
+      const width = Math.max(0.9, 2 * TUBE_RADIUS * s)
+      const white = 1 - smooth(develop, develop + COOL_TIME, t.age)
+      const tint = t.jitter * 16
+      const nb = i + 1 < this.count ? i + 1 : i - 1
+      // Highlight side: toward the light, i.e. toward the hollow's centre.
+      const hx = cx - camX * (focal / Z_FAR)
+      const hy = cy + -0.06 * H + camY * (focal / Z_FAR)
+
+      // The white tube is the light: a halo whose strength follows the music.
+      if (white > 0.02) {
+        lc.globalCompositeOperation = 'lighter'
+        lc.globalAlpha = Math.min(1, 0.35 * white * this.light)
+        lc.strokeStyle = tubeColor(t.temperature, 0, 0.5, 0, 1, 0.3)
+        lc.lineWidth = width * 7
+        this.tracePath(lc, xs, ys, o, 0, P)
+        lc.stroke()
+        lc.globalCompositeOperation = 'source-over'
+      }
+
+      // Dark edge of the cylinder, whole tube at once.
+      lc.globalAlpha = fade
+      lc.strokeStyle = '#000'
+      lc.lineWidth = width
+      this.tracePath(lc, xs, ys, o, 0, P)
+      lc.stroke()
+
+      const highlight = width > 1.6
+      if (highlight) {
+        const off = width * 0.17
+        for (let p = 0; p < P; p++) {
+          const dx = hx - xs[o + p]
+          const dy = hy - ys[o + p]
+          const d = Math.hypot(dx, dy) || 1
+          this.hlX[p] = xs[o + p] + (dx / d) * off
+          this.hlY[p] = ys[o + p] + (dy / d) * off
+        }
+      }
+
+      for (let sg = 0; sg < SEGMENTS; sg++) {
+        const a = Math.round((sg * P) / SEGMENTS)
+        const b = Math.round(((sg + 1) * P) / SEGMENTS)
+        const pc = (a + b) >> 1
+        const lit = nb >= 0 ? this.shade(i, nb, pc) : AMBIENT + this.light
+        // A developing tube glows with the light it emits.
+        const light = white > 0 ? lit + (this.light - lit) * white : lit
+        const pos = this.pos[(pc + shift + P * 4) % P]
+        // Body of the cylinder.
+        lc.strokeStyle = tubeColor(t.temperature, depth, pos, tint, light, white * this.light)
+        lc.lineWidth = width * 0.66
+        this.tracePath(lc, xs, ys, o, a, b)
+        lc.stroke()
+        // Highlight along the side facing the light.
+        if (highlight) {
+          lc.strokeStyle = tubeColor(t.temperature, depth, pos, tint, Math.min(1.6, light * 1.6 + 0.08), white * this.light)
+          lc.lineWidth = width * 0.22
+          this.tracePath(lc, this.hlX, this.hlY, 0, a, b)
+          lc.stroke()
+        }
+      }
+    }
+    lc.globalAlpha = 1
+    lc.globalCompositeOperation = 'source-over'
+  }
+
+  /**
+   * Traces points a..b (wrapping) of the loop stored at offset o in (X, Y) as
+   * a smooth curve: points are control points, the curve passes through the
+   * midpoints between them, so consecutive segments join seamlessly.
+   */
+  private tracePath(lc: CanvasRenderingContext2D, X: Float32Array, Y: Float32Array, o: number, a: number, b: number) {
+    const P = POINTS
+    const at = (k: number) => o + (((k % P) + P) % P)
+    let i0 = at(a - 1)
+    let i1 = at(a)
+    lc.beginPath()
+    lc.moveTo((X[i0] + X[i1]) / 2, (Y[i0] + Y[i1]) / 2)
+    for (let k = a; k < b; k++) {
+      i0 = at(k)
+      i1 = at(k + 1)
+      lc.quadraticCurveTo(X[i0], Y[i0], (X[i0] + X[i1]) / 2, (Y[i0] + Y[i1]) / 2)
+    }
+    if (a === 0 && b === P) lc.closePath()
   }
 }
