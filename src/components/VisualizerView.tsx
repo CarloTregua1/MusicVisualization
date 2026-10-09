@@ -8,7 +8,7 @@ import { rms } from '../dsp/resynth'
 import { tempoAt, type TempoTrack } from '../dsp/tempo'
 import { Backdrop } from '../render/backdrop'
 import { bpmToTemperature, neon } from '../render/neon'
-import { Tunnel, type TunnelInput } from '../render/tunnel'
+import { FiberTunnel, type FiberInput } from '../render/fiberTunnel'
 import { Transport } from './Transport'
 import { useCanvas } from './useCanvas'
 
@@ -44,11 +44,12 @@ export function VisualizerView({ player, audio, tempo, tempoProgress, playing, t
     const { mono, sampleRate } = audio
     const analyzer = new Analyzer(FFT_SIZE)
     const mapper = new BandMapper(FFT_SIZE, sampleRate)
-    const tunnel = new Tunnel(mapper.count)
+    const tunnel = new FiberTunnel(mapper.count)
     const backdrop = new Backdrop()
     // Sensitive enough to catch softer events (hats, plucks), up to ~5 strings a second.
     const onsets = new OnsetDetector(mapper.count, 0.18, 1.7, 8)
-    const input: TunnelInput = { bands: mapper.levels, level: 0, lobes: 5, temperature: 0.5, beat: 0 }
+    const input: FiberInput = { bands: mapper.levels, level: 0, temperature: 0.5 }
+    let beat = 0
     const win = new Float32Array(FFT_SIZE)
     let temp = 0.5
     let shownBpm = 120
@@ -69,7 +70,7 @@ export function VisualizerView({ player, audio, tempo, tempoProgress, playing, t
 
       const t = player.currentTime()
       const center = Math.round(t * sampleRate)
-      const terms = analyzer.analyze(mono, sampleRate, center, 1)
+      analyzer.analyze(mono, sampleRate, center, 1)
       mapper.map(analyzer.spectrum)
 
       const start = center - FFT_SIZE / 2
@@ -79,17 +80,13 @@ export function VisualizerView({ player, audio, tempo, tempoProgress, playing, t
       }
       const level = Math.min(1, Math.max(0, (20 * Math.log10(rms(win) + 1e-9) + 50) / 44))
 
-      // Pitch class of the strongest partial picks the lobe count: 3..14.
-      if (terms.length) {
-        const pc = (((Math.round(12 * Math.log2(terms[0].freq / 440)) + 9) % 12) + 12) % 12
-        input.lobes = 3 + pc
-      }
-
-      // A new string is born only on a sound onset. Near the end of the file the
-      // window is cut off by zero padding, which would look like a fake onset.
+      // Fibres are emitted only while there is sound; onsets make taller, brighter
+      // ridges. Near the end of the file the window is cut off by zero padding,
+      // which would look like a fake onset.
       const inside = center + FFT_SIZE / 2 <= mono.length
       const onset = player.playing && inside ? onsets.update(mapper.levels, t) : 0
-      input.beat = Math.max(onset, input.beat * Math.exp(-realDt * 6))
+      const sounding = player.playing && inside && level > 0.1
+      beat = Math.max(onset, beat * Math.exp(-realDt * 6))
 
       const track = tempoRef.current
       const bpmNow = track ? tempoAt(track, t) : NaN
@@ -99,10 +96,10 @@ export function VisualizerView({ player, audio, tempo, tempoProgress, playing, t
       input.temperature = temp
       input.level = level
 
-      // Slow outward travel keeps the strings close together.
-      const lifetime = Math.min(5, Math.max(3, 4 * (120 / shownBpm)))
-      tunnel.update(dt, input, lifetime, 0.25 + 0.5 * temp, onset)
-      backdrop.draw(ctx, dt, { temperature: temp, level: player.playing ? level : 0, beat: input.beat })
+      // Faster music flies through the tunnel faster.
+      const lifetime = Math.min(3.2, Math.max(1.8, 2.6 * (120 / shownBpm)))
+      tunnel.update(dt, input, sounding, onset, lifetime)
+      backdrop.draw(ctx, dt, { temperature: temp, level: player.playing ? level : 0, beat })
       tunnel.render(ctx)
 
       if (now - lastHud > 250) {

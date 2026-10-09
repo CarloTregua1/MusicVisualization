@@ -12,8 +12,8 @@ export interface BackdropInput {
 }
 
 /**
- * Animated background in the complementary hue of the strings, kept dark so
- * the neon always reads on top of it: drifting nebula clouds, a deep tunnel
+ * Animated background in the complementary hue of the strings, kept near
+ * black so the neon always reads on top of it: drifting nebula clouds, a deep tunnel
  * mouth at the centre, and a field of particles streaming out of the tunnel
  * that speeds up with loudness and onsets.
  */
@@ -58,7 +58,7 @@ export class Backdrop {
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.globalCompositeOperation = 'source-over'
     ctx.globalAlpha = 1
-    ctx.fillStyle = `hsl(${hue.toFixed(1)}, 55%, 5%)`
+    ctx.fillStyle = `hsl(${hue.toFixed(1)}, 45%, 3%)`
     ctx.fillRect(0, 0, W, H)
 
     // Nebula: large soft clouds orbiting slowly, breathing with the music.
@@ -68,9 +68,9 @@ export class Backdrop {
       const bx = cx + Math.cos(a) * minDim * (0.28 + 0.08 * k)
       const by = cy + Math.sin(a * 1.3) * minDim * (0.22 + 0.05 * k)
       const r = minDim * (0.55 + 0.1 * Math.sin(t * 0.21 + k * 1.7)) * (1 + 0.15 * beat)
-      const light = 16 + 10 * level + 6 * beat
+      const light = 5 + 4 * level + 3 * beat
       const g = ctx.createRadialGradient(bx, by, 0, bx, by, r)
-      g.addColorStop(0, `hsla(${(hue + (k - 1) * 24).toFixed(1)}, 85%, ${light.toFixed(1)}%, 0.55)`)
+      g.addColorStop(0, `hsla(${(hue + (k - 1) * 24).toFixed(1)}, 70%, ${light.toFixed(1)}%, 0.5)`)
       g.addColorStop(1, `hsla(${(hue + (k - 1) * 24).toFixed(1)}, 85%, ${light.toFixed(1)}%, 0)`)
       ctx.fillStyle = g
       ctx.fillRect(bx - r, by - r, r * 2, r * 2)
@@ -93,7 +93,7 @@ export class Backdrop {
       const s = Math.sin(this.angle[i])
       const tw = 0.6 + 0.4 * Math.sin(t * 3 + this.twinkle[i])
       ctx.strokeStyle = `hsl(${(hue + this.hueJitter[i]).toFixed(0)}, 90%, 66%)`
-      ctx.globalAlpha = (0.12 + 0.5 * Math.min(1, z1 * 1.4)) * tw
+      ctx.globalAlpha = (0.06 + 0.3 * Math.min(1, z1 * 1.4)) * tw
       ctx.lineWidth = this.size[i] * (0.5 + 1.5 * z1) * px
       ctx.beginPath()
       ctx.moveTo(cx + c * r0, cy + s * r0)

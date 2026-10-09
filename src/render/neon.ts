@@ -1,12 +1,14 @@
 /**
  * Neon palette. Position along the spectrum (0 = bass, 1 = treble) picks a
  * hue within a band; temperature (0 = cold / slow, 1 = hot / fast) slides
- * that band from violet → electric blue → aqua to magenta → red → gold.
+ * that band from aqua → violet to hot pink → gold. Both bands run in the
+ * same direction (bass → treble increases hue), so at every temperature the
+ * spectrum spans ~90° of hue — e.g. blue lows and pink highs in between.
  * Hues are interpolated linearly without wrapping, so the cold→hot path
  * travels through blue/violet/pink and never through muddy greens.
  */
-const COLD = [268, 168] // violet → aqua
-const HOT = [318, 412] // hot pink → red → gold (412 ≡ 52)
+const COLD = [185, 275] // aqua → violet
+const HOT = [330, 420] // hot pink → red → gold (420 ≡ 60)
 
 export function neonHue(temperature: number, position: number): number {
   const a = COLD[0] + (HOT[0] - COLD[0]) * temperature
