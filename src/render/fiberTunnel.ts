@@ -130,6 +130,8 @@ export class FiberTunnel {
    * scene light.
    */
   stage = { x: 0, y: 0, rimRadius: 0, roll: 0, rollX: 0, rollY: 0, light: 0 }
+  /** Average colour position of the visible tubes (0 bass pink … 1 treble mint). */
+  meanColourPos = 0.4
   /** Live-tunable look; see tunnelParams.ts. */
   params: TunnelParams = { ...MEASURED_PARAMS }
   /** Brightness of the white tube = the scene's light, 0..1. */
@@ -248,6 +250,11 @@ export class FiberTunnel {
       const own = 0.5 * t.brightness + 0.5 * (loudest / (n - 1))
       this.colourMean += (own - this.colourMean) * (1 - Math.exp(-dt / COLOUR_MEMORY))
     }
+    if (this.count > 0) {
+      let sum = 0
+      for (let i = 0; i < this.count; i++) sum += this.tube(i).colourPos
+      this.meanColourPos = sum / this.count
+    }
     const sb = this.smoothBands
     for (let i = 0; i < sb.length; i++) sb[i] += (input.bands[i] - sb[i]) * a
 
@@ -328,6 +335,11 @@ export class FiberTunnel {
 
   private develop(t: Tube, input: FiberInput, onset: number) {
     const n = t.bands.length
+    if (this.count > 0) {
+      let sum = 0
+      for (let i = 0; i < this.count; i++) sum += this.tube(i).colourPos
+      this.meanColourPos = sum / this.count
+    }
     const sb = this.smoothBands
     // Light blur across bands keeps the shape organic; keep the peak of the window.
     for (let i = 0; i < n; i++) {
@@ -686,7 +698,7 @@ export class FiberTunnel {
       if (pr.shadow > 0 && detailed) {
         lc.globalAlpha = fade * pr.shadow
         lc.strokeStyle = '#000'
-        lc.lineWidth = width * 1.9
+        lc.lineWidth = width * 1.35
         lc.stroke()
       }
       // Edge glow: tube edges seen against the light catch it.

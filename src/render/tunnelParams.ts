@@ -63,6 +63,8 @@ export interface TunnelParams {
   edgeGlow: number
   /** Cool fill light from the camera's side, so distant tubes keep their form. */
   fill: number
+  /** Strength of the coloured background (complementary to the tubes); 0 = near black. */
+  background: number
   /** Colour from frequency (0 = age ramp only, 1 = fully by frequency). */
   colourVariety: number
   /** Random moments per minute when the light cuts out while music plays (0 = never). */
@@ -108,11 +110,12 @@ export const MEASURED_PARAMS: TunnelParams = {
   cameraRange: 10,
   focal: 2.1,
   lightFalloff: 3.2,
-  shadow: 0.45,
+  shadow: 0.15,
   specular: 0.8,
   edgeGlow: 0.5,
   fill: 0.12,
   colourVariety: 0.6,
+  background: 0.7,
   blackoutsPerMinute: 4,
   blackoutLength: 0.7,
   dancerOn: true,
@@ -178,6 +181,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   { key: 'blackoutsPerMinute', label: 'Blackouts per minute', group: 'Light', min: 0, max: 20, step: 0.5 },
   { key: 'blackoutLength', label: 'Blackout length (s)', group: 'Light', min: 0.1, max: 3, step: 0.05 },
   { key: 'colourVariety', label: 'Colour variety', group: 'Colour', min: 0, max: 1, step: 0.05 },
+  { key: 'background', label: 'Background', group: 'Colour', min: 0, max: 1, step: 0.05 },
   { key: 'dancerSize', label: 'Size', group: 'Dancer', min: 0.2, max: 1.2, step: 0.05 },
   { key: 'dancerEnergy', label: 'Energy', group: 'Dancer', min: 0, max: 2, step: 0.05 },
   { key: 'dancerThickness', label: 'Thickness', group: 'Dancer', min: 0.01, max: 0.08, step: 0.005 },

@@ -25,6 +25,12 @@ export function frequencyHue(pos: number): number {
  * MAX_COLOUR_LIGHTNESS, so no other tube can look white however brightly it
  * is lit.
  */
+/** The hue tubeColor uses (degrees, unwrapped), without lightness or saturation. */
+export function tubeHue(temperature: number, depth: number, pos: number, variety: number): number {
+  const ageHue = 320 - 135 * depth + (pos - 0.5) * 36
+  return ageHue + (frequencyHue(pos) - ageHue) * variety + (temperature - 0.5) * 110
+}
+
 export function tubeColor(
   temperature: number,
   depth: number,
@@ -34,8 +40,7 @@ export function tubeColor(
   white: number,
   variety = 0,
 ): string {
-  const ageHue = 320 - 135 * depth + (pos - 0.5) * 36
-  const hue = ageHue + (frequencyHue(pos) - ageHue) * variety + (temperature - 0.5) * 110 + tint
+  const hue = tubeHue(temperature, depth, pos, variety) + tint
   const lit = 4 + 54 * light
   let lightness: number
   let sat: number
