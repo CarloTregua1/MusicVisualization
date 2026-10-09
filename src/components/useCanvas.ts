@@ -7,8 +7,11 @@ export interface CanvasHandle {
   attach: RefCallback<HTMLCanvasElement>
 }
 
-/** `maxDpr` caps the resolution for full-screen, fill-rate-heavy canvases. */
-export function useCanvas(maxDpr = Infinity): CanvasHandle {
+/**
+ * `maxDpr` caps the pixel ratio, and `maxPixels` the total backing-store size,
+ * for full-screen, fill-rate-heavy canvases.
+ */
+export function useCanvas(maxDpr = Infinity, maxPixels = Infinity): CanvasHandle {
   const el = useRef<HTMLCanvasElement | null>(null)
   const observer = useRef<ResizeObserver | null>(null)
   const attach = useCallback((canvas: HTMLCanvasElement | null) => {
@@ -17,7 +20,8 @@ export function useCanvas(maxDpr = Infinity): CanvasHandle {
     el.current = canvas
     if (!canvas) return
     const resize = () => {
-      const dpr = Math.min(maxDpr, window.devicePixelRatio || 1)
+      const area = Math.max(1, canvas.clientWidth * canvas.clientHeight)
+      const dpr = Math.min(maxDpr, window.devicePixelRatio || 1, Math.sqrt(maxPixels / area))
       const w = Math.max(1, Math.round(canvas.clientWidth * dpr))
       const h = Math.max(1, Math.round(canvas.clientHeight * dpr))
       if (canvas.width !== w) canvas.width = w
@@ -26,6 +30,6 @@ export function useCanvas(maxDpr = Infinity): CanvasHandle {
     resize()
     observer.current = new ResizeObserver(resize)
     observer.current.observe(canvas)
-  }, [maxDpr])
+  }, [maxDpr, maxPixels])
   return useMemo(() => ({ el, attach }), [attach])
 }

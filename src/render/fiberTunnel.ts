@@ -12,20 +12,25 @@ const Z_FAR = 3.3
 const Z_NEAR = 0.35
 /** Time constant (s) of the spectrum smoothing, so consecutive tubes stack coherently. */
 const COHERENCE = 0.06
-/** Camera height above the tunnel axis: near tubes swing down into a floor. */
-const CAMERA_HEIGHT = 0.5
+/** Camera height relative to the tunnel axis (negative = below), as in the reference's low view. */
+const CAMERA_HEIGHT = -0.4
+/** Vertical aim offset, as a fraction of screen height, keeping the hollow framed. */
+const AIM = 0.05
 /** World radius of a tube's cross-section, in tunnel radii. */
-const TUBE_RADIUS = 0.0045
+const TUBE_RADIUS = 0.008
 /** Height of the tallest walls, in tunnel radii. Walls grow straight up. */
-const WALL_HEIGHT = 4.2
+const WALL_HEIGHT = 1.5
 /** Walls rise only where a band beats the mean of its ±WALL_SPAN neighbours (a spectral peak). */
-const WALL_SPAN = 4
+const WALL_SPAN = 3
 /** A band must beat its neighbours by this much before any wall rises… */
-const WALL_MIN_CONTRAST = 0.04
+const WALL_MIN_CONTRAST = 0.02
 /** …and by this much (beyond the minimum) for a full-height wall. */
-const WALL_CONTRAST = 0.16
+const WALL_CONTRAST = 0.12
 /** Bell weights used to spread each peak over its neighbours, so walls are rounded curtains. */
-const WALL_SPREAD = [1, 3, 5, 6, 5, 3, 1]
+const WALL_SPREAD = [1, 3, 4, 3, 1]
+/** Small waves along each tube, driven by loudness: how many around the loop, and their height. */
+const WAVE_COUNT = 13
+const WAVE_HEIGHT = 0.3
 /** After its development, a tube fades from white to its colour over this long (s). */
 const COOL_TIME = 0.12
 /** Light from the white tube falls off over this distance (tunnel radii). */
@@ -53,6 +58,8 @@ interface Tube {
   jitter: number
   /** Rotation of the spectrum layout: successive tubes turn slowly, so the stack swirls. */
   turn: number
+  /** Phase of the small waves; drifts slowly from tube to tube so neighbours stay coherent. */
+  wave: number
 }
 
 export interface FiberInput {
@@ -145,6 +152,7 @@ export class FiberTunnel {
       age: 0,
       jitter: 0,
       turn: 0,
+      wave: 0,
     }))
     this.smoothBands = new Float32Array(bandCount)
     this.rawPeaks = new Float32Array(bandCount)
@@ -226,6 +234,7 @@ export class FiberTunnel {
     t.age = 0
     t.jitter = ((this.head * 0.618034) % 1) - 0.5
     t.turn = 0.45 * Math.sin(this.time * 0.07) + 0.15 * Math.sin(this.time * 0.19 + 1)
+    t.wave = this.time * 0.9
   }
 
   private develop(t: Tube, input: FiberInput, onset: number) {
@@ -383,7 +392,7 @@ export class FiberTunnel {
   private drawTubes(lc: CanvasRenderingContext2D, cx: number, cy: number, focal: number, H: number) {
     const camX = 0.12 * Math.sin(this.time * 0.11)
     const camY = CAMERA_HEIGHT + 0.08 * Math.sin(this.time * 0.08 + 1.3)
-    const aimY = -0.06 * H
+    const aimY = AIM * H
     const last = this.tubes[0].bands.length - 1
     const logSpan = Math.log(Z_FAR / Z_NEAR)
     const develop = 1 / TUBE_RATE
@@ -409,7 +418,11 @@ export class FiberTunnel {
         const lift = t.peaks[k0] * (1 - f) + t.peaks[Math.min(last, k0 + 1)] * f
         const shape = lift * lift * (3 - 2 * lift)
         const r = 1 + 0.004 * t.jitter
-        const h = WALL_HEIGHT * shape * amp * this.wallWeight[p]
+        // Many small waves, as tall as the band is loud, plus walls at the peaks.
+        const v = t.bands[k0] * (1 - f) + t.bands[Math.min(last, k0 + 1)] * f
+        const th = (p / P) * 2 * Math.PI
+        const ripple = WAVE_HEIGHT * v * v * (0.5 + 0.5 * Math.sin(WAVE_COUNT * th + t.wave))
+        const h = (WALL_HEIGHT * shape + ripple) * amp * this.wallWeight[p]
         const x = ox + r * this.cos[p] * s
         const y = oy + (r * this.sin[p] - h) * s
         xs[o + p] = x
@@ -443,7 +456,7 @@ export class FiberTunnel {
       const nb = i + 1 < this.count ? i + 1 : i - 1
       // Highlight side: toward the light, i.e. toward the hollow's centre.
       const hx = cx - camX * (focal / Z_FAR)
-      const hy = cy + -0.06 * H + camY * (focal / Z_FAR)
+      const hy = cy + aimY + camY * (focal / Z_FAR)
 
       // The white tube is the light: a halo whose strength follows the music.
       if (white > 0.02) {
