@@ -14,10 +14,20 @@ export function synthesize(
   out: Float32Array | Float64Array,
 ): void {
   out.fill(0)
+  const offset = start - center
   for (const { freq, amp, phase } of terms) {
+    // sin recurrence: s[i+1] = 2cos(ω)·s[i] − s[i−1]; stable in float64 over
+    // the window lengths we use, and far cheaper than Math.sin per sample.
     const w = (2 * Math.PI * freq) / sampleRate
-    const offset = start - center
-    for (let i = 0; i < out.length; i++) out[i] += amp * Math.sin(w * (offset + i) + phase)
+    const k = 2 * Math.cos(w)
+    let prev = amp * Math.sin(w * (offset - 1) + phase)
+    let cur = amp * Math.sin(w * offset + phase)
+    for (let i = 0; i < out.length; i++) {
+      out[i] += cur
+      const next = k * cur - prev
+      prev = cur
+      cur = next
+    }
   }
 }
 

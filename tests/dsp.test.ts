@@ -121,10 +121,17 @@ describe('details', () => {
 
 describe('formatting', () => {
   it('formats terms with the spec precision', () => {
-    const tex = termsToLatex([{ freq: 440.04, amp: 0.49999, phase: -1.234 }], false)
+    const tex = termsToLatex([{ freq: 440.04, amp: 0.49999, phase: -1.234 }], { colored: false })
     expect(tex).toContain('0.500\\sin')
     expect(tex).toContain('440.0')
     expect(tex).toContain('- 1.23')
+    expect(tex).toContain('\\approx\\;')
+    expect(tex).not.toContain('approx;')
+  })
+
+  it('can annotate frequencies with note names', () => {
+    const tex = termsToLatex([{ freq: 277.18, amp: 0.1, phase: 0 }], { notes: true })
+    expect(tex).toContain('\\underset{\\mathrm{C}\\sharp4}{277.2}')
   })
 
   it('names notes against A4 = 440', () => {

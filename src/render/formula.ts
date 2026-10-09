@@ -1,4 +1,5 @@
 import type { Term } from '../types'
+import { noteLatex } from './notes'
 import { termColor } from './palette'
 
 const TERMS_PER_LINE = 3
@@ -13,22 +14,26 @@ function signed(value: string, first: boolean): string {
 }
 
 /** One term as LaTeX, without a leading sign. */
-function termLatex({ freq, amp, phase }: Term): string {
+function termLatex({ freq, amp, phase }: Term, notes: boolean): string {
   const ph = fmtPhase(phase)
   const phasePart = ph.startsWith('-') ? `- ${ph.slice(1)}` : `+ ${ph}`
-  return `${amp.toFixed(3)}\\sin\\!\\left(2\\pi\\cdot ${freq.toFixed(1)}\\,(t-t_0) ${phasePart}\\right)`
+  const f = notes ? `\\underset{${noteLatex(freq)}}{${freq.toFixed(1)}}` : freq.toFixed(1)
+  return `${amp.toFixed(3)}\\sin\\!\\left(2\\pi\\cdot ${f}\\,(t-t_0) ${phasePart}\\right)`
 }
 
 /**
  * Builds the coloured KaTeX expression x(t) ≈ Σ Aₖ sin(2π fₖ (t − t₀) + φₖ),
  * broken over several aligned lines so long sums stay readable.
  */
-export function termsToLatex(terms: readonly Term[], colored = true): string {
+export function termsToLatex(
+  terms: readonly Term[],
+  { colored = true, notes = false }: { colored?: boolean; notes?: boolean } = {},
+): string {
   if (terms.length === 0) return 'x(t) \\approx 0'
   const lines: string[] = []
   let line = ''
   terms.forEach((t, i) => {
-    const body = signed(termLatex(t), i === 0)
+    const body = signed(termLatex(t, notes), i === 0)
     const piece = colored ? `\\textcolor{${termColor(i)}}{${body}}` : body
     line += (line ? ' ' : '') + piece
     if ((i + 1) % TERMS_PER_LINE === 0 || i === terms.length - 1) {
@@ -36,7 +41,7 @@ export function termsToLatex(terms: readonly Term[], colored = true): string {
       line = ''
     }
   })
-  return `\\begin{aligned} x(t) \\approx\; & ${lines.join(' \\\\ & ')} \\end{aligned}`
+  return `\\begin{aligned} x(t) \\approx\\; & ${lines.join(' \\\\ & ')} \\end{aligned}`
 }
 
 /** Plain-text version, e.g. for copying. */
