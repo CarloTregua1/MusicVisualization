@@ -12,8 +12,12 @@ const Z_FAR = 2.5
 const Z_NEAR = 0.35
 /** Time constant (s) of the spectrum smoothing, so consecutive tubes stack coherently. */
 const COHERENCE = 0.06
-/** Camera height above the tunnel axis, close to the top surface (the wall is at 1). */
-const CAMERA_HEIGHT = 0.72
+/**
+ * Camera height relative to the tunnel axis (negative = below; the walls are
+ * at ±1). Chosen against the reference: just above the floor, so the floor is
+ * seen edge-on and the walls over the hollow spread out tall.
+ */
+const CAMERA_HEIGHT = -0.72
 /** World radius of a tube's cross-section, in tunnel radii. */
 const TUBE_RADIUS = 0.008
 /** Height of the tallest walls, in tunnel radii. Walls grow straight up. */
@@ -28,6 +32,8 @@ const WALL_CONTRAST = 0.12
 const WALL_SPREAD = [1, 3, 4, 3, 1]
 /** Small irregular waves along each tube; their height follows the loudness. */
 const WAVE_HEIGHT = 0.3
+/** Sideways share of the wave displacement: waves grow mostly vertically. */
+const VERTICAL_BIAS = 0.3
 /** Irregular lumps in each tube's outline (and so in the hollow's rim), in tunnel radii. */
 const LUMP = 0.1
 /** After its development, a tube fades from white to its colour over this long (s). */
@@ -96,9 +102,10 @@ function tubeColor(temperature: number, depth: number, pos: number, tint: number
  * Tunnel of glowing tubes, following the reference's behaviour:
  *
  * 1. A tube is born at the innermost position, glowing white.
- * 2. While white, it develops its shape from the sound of that moment; the
- *    shape grows vertically (straight up), not outward.
- * 3. After 1/15 s it is done: it takes its colour, moves to the next
+ * 2. While white, it develops its shape from the sound of that moment;
+ *    waves and walls form all around it, growing mostly vertically (up over
+ *    the top half, down under the bottom half), away from the hollow.
+ * 3. After 1/8 s it is done: it takes its colour, moves to the next
  *    position out, and a new white tube is born inside it.
  * 4. The white tube is the scene's light. Its brightness follows the music,
  *    so when the music stops it goes dark and so does everything.
@@ -112,6 +119,8 @@ export class FiberTunnel {
   private head = -1
   private count = 0
   private time = 0
+  /** Camera height above the tunnel axis (negative = below), in tunnel radii. */
+  cameraHeight = CAMERA_HEIGHT
   /** Brightness of the white tube = the scene's light, 0..1. */
   private light = 0
   /** Slow left/right camera roll; this frame's angle in radians. */
@@ -122,7 +131,7 @@ export class FiberTunnel {
   /** Scratch: raw per-band peak strength before spreading. */
   private readonly rawPeaks: Float32Array
   private readonly pos: Float32Array
-  /** Wall height factor per point: full over the top and sides, none on the floor. */
+  /** Wall height factor per point (uniform: waves form all around the tube). */
   private readonly wallWeight: Float32Array
   private readonly cos: Float32Array
   private readonly sin: Float32Array
@@ -168,8 +177,7 @@ export class FiberTunnel {
       // goes there, raising walls over the top; quieter treble lines the floor.
       const fromTop = Math.abs(((th - 1.5 * Math.PI + 3 * Math.PI) % (2 * Math.PI)) - Math.PI)
       this.pos[i] = fromTop / Math.PI
-      // −sin θ is 1 at the top, 0 at the sides, −1 at the bottom.
-      this.wallWeight[i] = smooth(-0.6, 0.3, -this.sin[i])
+      this.wallWeight[i] = 1
     }
     this.layer = document.createElement('canvas')
     this.trail = document.createElement('canvas')
@@ -391,7 +399,7 @@ export class FiberTunnel {
 
   private drawTubes(lc: CanvasRenderingContext2D, cx: number, cy: number, focal: number) {
     const camX = 0.12 * Math.sin(this.time * 0.11)
-    const camY = CAMERA_HEIGHT + 0.04 * Math.sin(this.time * 0.08 + 1.3)
+    const camY = this.cameraHeight + 0.04 * Math.sin(this.time * 0.08 + 1.3)
     // Aim at the hollow: shift the view so the far end of the tunnel is centred.
     const aimX = camX * (focal / Z_FAR)
     const aimY = -camY * (focal / Z_FAR)
@@ -434,12 +442,14 @@ export class FiberTunnel {
           0.5 * Math.sin(7 * th + b * 0.9) + 0.3 * Math.sin(12 * th - b * 1.3 + 2.3) + 0.2 * Math.sin(19 * th + b * 2.1 + 0.6)
         const ripple = WAVE_HEIGHT * v * v * (0.5 + 0.5 * waves)
         const h = (WALL_HEIGHT * shape + ripple) * amp * this.wallWeight[p]
-        const x = ox + r * this.cos[p] * s
-        const y = oy + (r * this.sin[p] - h) * s
-        xs[o + p] = x
-        ys[o + p] = y
-        wx[o + p] = r * this.cos[p]
-        wy[o + p] = (y - oy) / s
+        // Grow away from the hollow, mostly vertically: up over the top half,
+        // down under the bottom half, only slightly sideways at the sides.
+        const ex = r * this.cos[p] + h * VERTICAL_BIAS * this.cos[p]
+        const ey = (r + h) * this.sin[p]
+        xs[o + p] = ox + ex * s
+        ys[o + p] = oy + ey * s
+        wx[o + p] = ex
+        wy[o + p] = ey
       }
     }
 
