@@ -1,5 +1,6 @@
 import type { BeatPhase } from '../dsp/beats'
 import { BEATS_PER_LOOP, DANCE_CLIPS, DANCE_JOINTS, SAMPLES_PER_BEAT } from './danceClips'
+import { detectStomp, handRaise } from './interaction'
 import { tubeColor } from './tubeColor'
 
 /** Head radius in figure heights (the figure is about 1 unit tall). */
@@ -72,6 +73,7 @@ const JOINT_NAMES = DANCE_JOINTS as readonly (keyof Skeleton)[]
 /** Poses kept for trails and echoes (~1 s at 60 fps). */
 const HISTORY = 72
 const PELVIS = JOINT_NAMES.indexOf('pelvis')
+const HEAD = JOINT_NAMES.indexOf('head')
 const HANDS = [JOINT_NAMES.indexOf('handL'), JOINT_NAMES.indexOf('handR')]
 const FEET = [JOINT_NAMES.indexOf('footL'), JOINT_NAMES.indexOf('footR')]
 const FRAMES_PER_LOOP = BEATS_PER_LOOP * SAMPLES_PER_BEAT
@@ -142,6 +144,14 @@ export class Dancer {
   private clock = 0
   /** Current dance-beat length (s), for echoes timed in beats. */
   beatPeriod = 0.5
+  /** Gestures from the last update, for the tubes: stomps this frame (side −1/+1, strength). */
+  stomps: { side: number; strength: number }[] = []
+  /** How far each hand is raised above the head, 0..1 (smoothed). */
+  raisedL = 0
+  raisedR = 0
+  /** How energetically the dancer is moving, 0..1 (smoothed): it adds to the scene light. */
+  glow = 0
+  private readonly prevFootY = [0, 0]
   private readonly pos = new Float32Array(JOINT_NAMES.length * 2)
   private readonly vel = new Float32Array(JOINT_NAMES.length * 2)
   private readonly target = new Float32Array(JOINT_NAMES.length * 2)
@@ -216,6 +226,7 @@ export class Dancer {
 
   update(dt: number, input: DancerInput, style: DancerStyle) {
     this.clock += dt
+    this.stomps = []
     // Half time for fast music: one dance beat spans two musical beats.
     const half = beat0HalfTime(input.beat.period)
     const beat = half
@@ -314,7 +325,27 @@ export class Dancer {
 
     // Colour follows the sound's brightness, smoothed so it glides.
     this.colourPos += (input.brightness - this.colourPos) * (1 - Math.exp(-dt / 0.4))
+    this.gestures(dt)
     this.record()
+  }
+
+  /** Stomps, raised hands and motion energy, read from the pose for the tubes to react to. */
+  private gestures(dt: number) {
+    FEET.forEach((f, n) => {
+      const y = this.pos[2 * f + 1]
+      const s = detectStomp(this.prevFootY[n], y, this.vel[2 * f + 1])
+      // Screen-left foot (footL) ripples on the left.
+      if (s > 0) this.stomps.push({ side: n === 0 ? -1 : 1, strength: s })
+      this.prevFootY[n] = y
+    })
+    const headY = this.pos[2 * HEAD + 1]
+    const k = 1 - Math.exp(-dt / 0.12)
+    this.raisedL += (handRaise(this.pos[2 * HANDS[0] + 1], headY) - this.raisedL) * k
+    this.raisedR += (handRaise(this.pos[2 * HANDS[1] + 1], headY) - this.raisedR) * k
+    let speed = 0
+    for (let j = 0; j < JOINT_NAMES.length; j++) speed += Math.hypot(this.vel[2 * j], this.vel[2 * j + 1])
+    const motion = Math.min(1, speed / JOINT_NAMES.length / 0.9)
+    this.glow += (motion - this.glow) * (1 - Math.exp(-dt / 0.3))
   }
 
   /** For drops: one of the three most energetic clips (not the current one). */

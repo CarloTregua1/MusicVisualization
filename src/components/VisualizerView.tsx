@@ -211,6 +211,16 @@ export function VisualizerView({ player, audio, tempo, beats, structure, tempoPr
         },
         { energy: pr.dancerEnergy },
       )
+      // The dancer acts on the tubes: stomps ripple, raised hands pull up walls,
+      // energetic moves add light. Nothing when the dancer is switched off.
+      if (pr.dancerOn) {
+        for (const st of dancer.stomps) tunnel.addRipple(st.side, st.strength)
+        tunnel.handPull = { left: dancer.raisedL, right: dancer.raisedR }
+        tunnel.dancerGlow = dancer.glow
+      } else {
+        tunnel.handPull = { left: 0, right: 0 }
+        tunnel.dancerGlow = 0
+      }
       if (pr.dancerOn) {
         const st = tunnel.stage
         drawDancer(

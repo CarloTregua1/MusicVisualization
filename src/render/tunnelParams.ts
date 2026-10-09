@@ -83,6 +83,12 @@ export interface TunnelParams {
   dancerEchoes: number
   /** The dancer's reflection on the crater floor, 0..1. */
   dancerReflection: number
+  /** Stomps send ripples through the tubes, 0..1. */
+  stompRipples: number
+  /** A raised hand pulls up a wall in the forming tubes, 0..1. */
+  handWalls: number
+  /** Energetic dancing adds to the white rim's light, 0..1. */
+  dancerLight: number
   /** Strength of the glow (bloom). */
   bloom: number
   /** Strength of the motion trail. */
@@ -128,6 +134,9 @@ export const MEASURED_PARAMS: TunnelParams = {
   dancerTrails: 0.6,
   dancerEchoes: 0.5,
   dancerReflection: 0.5,
+  stompRipples: 0.7,
+  handWalls: 0.7,
+  dancerLight: 0.5,
   bloom: 0.6,
   trail: 0.1,
 }
@@ -193,5 +202,8 @@ export const PARAM_SPECS: ParamSpec[] = [
   { key: 'dancerTrails', label: 'Light trails', group: 'Dancer', min: 0, max: 1, step: 0.05 },
   { key: 'dancerEchoes', label: 'Echoes', group: 'Dancer', min: 0, max: 1, step: 0.05 },
   { key: 'dancerReflection', label: 'Reflection', group: 'Dancer', min: 0, max: 1, step: 0.05 },
+  { key: 'stompRipples', label: 'Stomp ripples', group: 'Dancer ↔ tubes', min: 0, max: 1.5, step: 0.05 },
+  { key: 'handWalls', label: 'Hand walls', group: 'Dancer ↔ tubes', min: 0, max: 1.5, step: 0.05 },
+  { key: 'dancerLight', label: 'Dancer light', group: 'Dancer ↔ tubes', min: 0, max: 1, step: 0.05 },
   { key: 'trail', label: 'Trail', group: 'Light', min: 0, max: 0.8, step: 0.01 },
 ]

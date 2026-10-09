@@ -1,4 +1,5 @@
 import { RollCamera } from './camera'
+import { RIPPLE_LIFE, rippleHeight, wallPull, type Ripple } from './interaction'
 import { tubeColor } from './tubeColor'
 import { MEASURED_PARAMS, type TunnelParams } from './tunnelParams'
 
@@ -65,6 +66,9 @@ interface Tube {
   /** Birth time: sets the phases of its waves and lumps, which drift slowly from
    * tube to tube so neighbours stay coherent while the pattern never repeats. */
   born: number
+  /** How far each hand was raised while this tube formed: a wall pulled up on that side. */
+  pullL: number
+  pullR: number
   // Sound character during development, each driving its own change of shape.
   /** Low/mid/high band energy, 0..1. */
   bass: number
@@ -187,6 +191,8 @@ export class FiberTunnel {
       jitter: 0,
       turn: 0,
       born: 0,
+      pullL: 0,
+      pullR: 0,
       bass: 0,
       mid: 0,
       treble: 0,
@@ -235,7 +241,10 @@ export class FiberTunnel {
     this.rollAngle = this.roll.update(dt)
     // The scene light is the white tube's brightness, which follows the music.
     // The scene light follows the music, and cuts out during random blackouts.
-    const target = playing && !this.updateBlackout(dt) ? input.level : 0
+    for (const r of this.ripples) r.age += dt
+    this.ripples = this.ripples.filter((r) => r.age < RIPPLE_LIFE)
+    // The rim's light follows the music, plus the dancer's energy; it cuts out in blackouts.
+    const target = playing && !this.updateBlackout(dt) ? Math.min(1.25, input.level + 0.35 * this.params.dancerLight * this.dancerGlow) : 0
     this.light += (target - this.light) * (1 - Math.exp(-dt / LIGHT_RESPONSE))
 
     const a = 1 - Math.exp(-dt / this.params.coherence)
@@ -274,6 +283,18 @@ export class FiberTunnel {
     if (!rim || (followSong ? songEvent : rim.age >= develop)) this.birth(input)
     // The white tube keeps developing: it holds the loudest moment of its window.
     this.develop(this.tube(this.count - 1), input, onset)
+  }
+
+  /** Live stomp ripples travelling outward through the rings. */
+  private ripples: Ripple[] = []
+  /** Raised hands of the dancer right now (0..1 each), applied to forming tubes. */
+  handPull = { left: 0, right: 0 }
+  /** The dancer's motion energy (0..1), adding to the rim's light. */
+  dancerGlow = 0
+
+  /** A stomp: starts a ripple at the crater on that side (−1 left, +1 right). */
+  addRipple(side: number, strength: number) {
+    if (this.ripples.length < 8) this.ripples.push({ age: 0, strength, side })
   }
 
   /** Random source for blackouts; replaceable in tests. */
@@ -323,6 +344,7 @@ export class FiberTunnel {
     t.jitter = ((this.head * 0.618034) % 1) - 0.5
     t.turn = 0.45 * Math.sin(this.time * 0.07) + 0.15 * Math.sin(this.time * 0.19 + 1)
     t.born = this.time
+    t.pullL = t.pullR = 0
     t.bass = t.mid = t.treble = t.brightness = t.noise = 0
   }
 
@@ -337,6 +359,9 @@ export class FiberTunnel {
     t.level = Math.max(t.level, input.level)
     t.onset = Math.max(t.onset, onset)
     t.temperature = input.temperature
+    // Raised hands pull a wall up in the tube forming now.
+    t.pullL = Math.max(t.pullL, this.handPull.left)
+    t.pullR = Math.max(t.pullR, this.handPull.right)
     // Sound character: band energies (peak-held over the development window),
     // brightness and noisiness (latest), each shaping the tube differently.
     const third = Math.floor(n / 3)
@@ -547,7 +572,11 @@ export class FiberTunnel {
         const ripple = pr.waveHeight * waveAmp * v * v * Math.pow(0.5 + 0.5 * waves, pr.crestSharpness)
         // Fine jagged spikes from noisy treble.
         const spikes = jag * Math.pow(0.5 + 0.5 * Math.sin(31 * u + b * 3.7), 6)
-        const h = (pr.wallHeight * shape + ripple + spikes) * amp * hScale + tilt * hScale * Math.cos(th - tiltDir)
+        const h =
+          (pr.wallHeight * shape + ripple + spikes) * amp * hScale +
+          tilt * hScale * Math.cos(th - tiltDir) +
+          // The dancer: stomp ripples, and walls pulled up by raised hands.
+          (pr.stompRipples * 0.9 * rippleHeight(R, th, this.ripples) + pr.handWalls * 1.6 * wallPull(th, t.pullL, t.pullR) * growth) * hScale
         // Walls curl outward as they rise, like the reference's towers.
         const X = (rr + pr.curl * h) * this.cos[p]
         const Z = (rr + pr.curl * h) * this.sin[p]
