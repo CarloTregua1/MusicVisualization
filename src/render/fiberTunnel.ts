@@ -2,7 +2,7 @@ import { RollCamera } from './camera'
 
 /** Upper bound on fibres alive at once. */
 const MAX_FIBERS = 200
-const POINTS = 128
+const POINTS = 160
 /** Each fibre is stroked as this many arcs, so its colour can follow the spectrum around it. */
 const SEGMENTS = 6
 /** Fibres emitted per second while sound is present: calm, not a blizzard. */
@@ -16,6 +16,18 @@ const COHERENCE = 0.1
 const CAMERA_HEIGHT = 0.5
 /** Minimum on-screen gap between a fibre and the newer one inside it, as a fraction of their natural spacing. */
 const MIN_GAP = 0.45
+/** Height of the tallest walls, in tunnel radii above the plain loop. */
+const WALL_HEIGHT = 4.5
+/** Walls rise only where a band beats the mean of its ±WALL_SPAN neighbours (a spectral peak). */
+const WALL_SPAN = 4
+/** A band must beat its neighbours by this much before any wall rises… */
+const WALL_MIN_CONTRAST = 0.04
+/** …and by this much (beyond the minimum) for a full-height wall. */
+const WALL_CONTRAST = 0.16
+/** Bell weights used to spread each peak over its neighbours, so walls are rounded curtains. */
+const WALL_SPREAD = [1, 3, 5, 6, 5, 3, 1]
+/** Wall height on the floor relative to the top of the tunnel. */
+const FLOOR_WALLS = 0.3
 /** Bloom is computed at this fraction of the canvas size (downscale = cheap blur). */
 const BLOOM_SCALE = 0.25
 
@@ -35,6 +47,8 @@ interface Fiber {
   treble: number
   /** Rotation of the spectrum mapping at birth: successive fibres turn, so the stack swirls. */
   turn: number
+  /** Wall lift per band, 0..1: how strongly each band is a loud spectral peak. */
+  peaks: Float32Array
 }
 
 export interface FiberInput {
@@ -67,11 +81,12 @@ function fiberColor(temperature: number, age: number, pos: number, energy: numbe
 /**
  * Light-painting tunnel, modelled on the reference video. Each fibre is a
  * thin glowing loop holding one moment of the spectrum around the circle
- * (bass at the bottom, treble at the top, mirrored left/right). Fibres are
+ * (bass at the top, treble at the bottom, mirrored left/right). Fibres are
  * emitted only while there is sound, born at the far end around the hollow,
  * and drift slowly toward the camera, so the hollow's rim is always the
- * latest sound. Loud bands rise outward into tall peaked towers; the camera
- * looks slightly down the tunnel so older fibres form a floor below it.
+ * latest sound. Loud bands rise outward into tall walls over the top and
+ * sides, while the floor below stays calm, as in the reference; the camera
+ * sits above the axis so older fibres form that floor.
  */
 export class FiberTunnel {
   private readonly fibers: Fiber[]
@@ -85,9 +100,13 @@ export class FiberTunnel {
   /** Slow left/right camera roll; this frame's angle in radians. */
   private readonly roll = new RollCamera()
   private rollAngle = 0
+  /** Scratch: raw per-band peak strength before spreading. */
+  private readonly rawPeaks: Float32Array
   /** Spectrum smoothed over time; fibres are emitted from this, not the raw frame. */
   private smoothBands: Float32Array
   private readonly pos: Float32Array
+  /** Wall height factor per point: full over the top, FLOOR_WALLS on the floor. */
+  private readonly wallWeight: Float32Array
   private readonly cos: Float32Array
   private readonly sin: Float32Array
   // This frame's fibre geometry (by live index) and per-point loudness.
@@ -114,19 +133,25 @@ export class FiberTunnel {
       phase: 0,
       treble: 0,
       turn: 0,
+      peaks: new Float32Array(bandCount),
     }))
     this.pos = new Float32Array(POINTS)
+    this.wallWeight = new Float32Array(POINTS)
     this.cos = new Float32Array(POINTS)
     this.sin = new Float32Array(POINTS)
     for (let i = 0; i < POINTS; i++) {
       const th = (i / POINTS) * 2 * Math.PI
       this.cos[i] = Math.cos(th)
       this.sin[i] = Math.sin(th)
-      // Canvas y points down, so θ = π/2 is the bottom: bass there, treble at the top.
-      const fromBottom = Math.abs(((th - Math.PI / 2 + 3 * Math.PI) % (2 * Math.PI)) - Math.PI)
-      this.pos[i] = fromBottom / Math.PI
+      // Canvas y points down, so θ = 3π/2 is the top. Bass (usually the loudest)
+      // goes there, raising walls over the top; quieter treble lines the floor.
+      const fromTop = Math.abs(((th - 1.5 * Math.PI + 3 * Math.PI) % (2 * Math.PI)) - Math.PI)
+      this.pos[i] = fromTop / Math.PI
+      // −sin θ is 1 at the top, −1 at the bottom.
+      this.wallWeight[i] = FLOOR_WALLS + (1 - FLOOR_WALLS) * (0.5 - 0.5 * Math.sin(th))
     }
     this.smoothBands = new Float32Array(bandCount)
+    this.rawPeaks = new Float32Array(bandCount)
     this.layer = document.createElement('canvas')
     this.trail = document.createElement('canvas')
     this.bloom = document.createElement('canvas')
@@ -192,6 +217,32 @@ export class FiberTunnel {
     const n = b.length
     for (let i = 0; i < n; i++) {
       f.bands[i] = 0.25 * b[Math.max(0, i - 1)] + 0.5 * b[i] + 0.25 * b[Math.min(n - 1, i + 1)]
+    }
+    // Walls rise at spectral peaks only: bands clearly louder than their
+    // neighbours (notes, harmonics), and loud in absolute terms too. Broad loud
+    // regions stay flat, so walls come out as narrow curtains, not a dome.
+    for (let i = 0; i < n; i++) {
+      let sum = 0
+      let cnt = 0
+      for (let j = Math.max(0, i - WALL_SPAN); j <= Math.min(n - 1, i + WALL_SPAN); j++) {
+        sum += f.bands[j]
+        cnt++
+      }
+      const contrast = f.bands[i] - sum / cnt - WALL_MIN_CONTRAST
+      const loud = smooth(0.25, 0.6, f.bands[i])
+      this.rawPeaks[i] = Math.min(1, Math.max(0, contrast / WALL_CONTRAST)) * loud
+    }
+    // Spread each peak with a bell so it rises as a rounded curtain, not a spike;
+    // the max keeps a peak's own height while its shoulders fall off smoothly.
+    const half = WALL_SPREAD.length >> 1
+    const top = WALL_SPREAD[half]
+    for (let i = 0; i < n; i++) {
+      let m = 0
+      for (let k = -half; k <= half; k++) {
+        const j = i + k
+        if (j >= 0 && j < n) m = Math.max(m, this.rawPeaks[j] * (WALL_SPREAD[k + half] / top))
+      }
+      f.peaks[i] = m
     }
     f.level = input.level
     f.onset = onset
@@ -294,9 +345,12 @@ export class FiberTunnel {
         const v = f.bands[k0] * (1 - t) + f.bands[Math.min(last, k0 + 1)] * t
         const th = (p / POINTS) * 2 * Math.PI
         const ripple = 0.6 * Math.sin(9 * th + ph * 3.1) + 0.4 * Math.sin(17 * th - ph * 4.7 + 1.3)
-        // Loud bands rise outward into tall, peaked towers (v³ keeps all but the
-        // loudest bands flat, so towers stand out from a calm floor).
-        const r = 1 + 2.6 * v * v * v * amp - 0.08 * v + fine * ripple
+        // Spectral peaks rise outward into tall, narrow walls; elsewhere the
+        // fibre stays a calm loop.
+        const lift = f.peaks[k0] * (1 - t) + f.peaks[Math.min(last, k0 + 1)] * t
+        // Smoothstep profile: rounded shoulders and a rounded crest.
+        const shape = lift * lift * (3 - 2 * lift)
+        const r = 1 + WALL_HEIGHT * shape * amp * this.wallWeight[p] + fine * ripple
         let rho = r * s
         if (i !== this.count - 1 && rho < inner[p] + gap) rho = inner[p] + gap
         inner[p] = rho
@@ -337,10 +391,14 @@ export class FiberTunnel {
         e = e / (b - a) + f.onset * 0.6 + this.flash * 0.3
         lc.strokeStyle = fiberColor(f.temperature, age, this.pos[(((a + b) >> 1) + shift + POINTS * 4) % POINTS], e, tint)
         lc.beginPath()
-        lc.moveTo(xs[o + a], ys[o + a])
-        for (let p = a + 1; p <= b; p++) {
-          const idx = o + (p % POINTS)
-          lc.lineTo(xs[idx], ys[idx])
+        // Smooth curve: each point is a control point, passing through the
+        // midpoints between points. Segments join exactly where they meet.
+        const prev = o + ((a - 1 + POINTS) % POINTS)
+        lc.moveTo((xs[prev] + xs[o + a]) / 2, (ys[prev] + ys[o + a]) / 2)
+        for (let p = a; p < b; p++) {
+          const i0 = o + (p % POINTS)
+          const i1 = o + ((p + 1) % POINTS)
+          lc.quadraticCurveTo(xs[i0], ys[i0], (xs[i0] + xs[i1]) / 2, (ys[i0] + ys[i1]) / 2)
         }
         lc.stroke()
       }
