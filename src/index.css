@@ -239,3 +239,6 @@ input[type='checkbox'] { accent-color: var(--accent); width: 15px; height: 15px;
 @media (max-width: 600px) {
   .tune { top: auto; bottom: 96px; max-height: 48vh; }
 }
+.tune-seg { display: flex; margin-top: 6px; border-color: rgba(255, 255, 255, 0.18); }
+.tune-seg button { flex: 1; color: rgba(255, 255, 255, 0.7); }
+.tune-seg button[aria-pressed='true'] { background: #fff; color: #000; }

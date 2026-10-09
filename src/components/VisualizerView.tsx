@@ -80,6 +80,9 @@ export function VisualizerView({ player, audio, tempo, tempoProgress, playing, t
     const backdrop = new Backdrop()
     // Sensitive enough to catch softer events (hats, plucks), up to ~5 strings a second.
     const onsets = new OnsetDetector(mapper.count, 0.18, 1.7, 8)
+    // Follow-the-song tube timing: a far more sensitive detector, retuned each
+    // frame from the sensitivity slider; a new tube is born on each event.
+    const tubeEvents = new OnsetDetector(mapper.count, 0.03, 2, 6)
     const input: FiberInput = { bands: mapper.levels, level: 0, temperature: 0.5 }
     let beat = 0
     const win = new Float32Array(FFT_SIZE)
@@ -119,6 +122,13 @@ export function VisualizerView({ player, audio, tempo, tempoProgress, playing, t
       // zero padding, which would look like a fake onset.
       const inside = center + FFT_SIZE / 2 <= mono.length
       const onset = player.playing && inside ? onsets.update(mapper.levels, t) : 0
+      const sens = paramsRef.current.songSensitivity
+      // Exponential mapping: sensitivity 0 needs big jumps (strong hits only);
+      // 1 accepts changes well below the recent average (every small change).
+      // On the reference song this spans ~6 to ~14 tubes per second.
+      tubeEvents.ratio = 2.6 * Math.pow(0.12, sens)
+      tubeEvents.floor = 10 * Math.pow(0.05, sens)
+      const songEvent = player.playing && inside && tubeEvents.update(mapper.levels, t) > 0
       const sounding = player.playing && inside
       beat = Math.max(onset, beat * Math.exp(-realDt * 6))
 
@@ -134,7 +144,7 @@ export function VisualizerView({ player, audio, tempo, tempoProgress, playing, t
       tunnel.params = paramsRef.current
       const spread = paramsRef.current.spreadSeconds
       const lifetime = spread * Math.min(1.3, Math.max(0.75, 120 / shownBpm))
-      tunnel.update(dt, input, sounding, onset, lifetime)
+      tunnel.update(dt, input, sounding, onset, lifetime, songEvent)
       frames++
       backdrop.draw(ctx, dt, { temperature: temp, level: player.playing ? level : 0, beat })
       tunnel.render(ctx)

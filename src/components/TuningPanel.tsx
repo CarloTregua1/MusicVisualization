@@ -53,7 +53,23 @@ export function TuningPanel({ params, fps, onChange, onClose }: Props) {
         {groups.map((group) => (
           <section key={group}>
             <h3>{group}</h3>
-            {PARAM_SPECS.filter((s) => s.group === group).map((spec) => (
+            {group === 'Flow' && (
+              <div className="tune-row">
+                <span>Tube timing</span>
+                <div className="seg tune-seg" role="group" aria-label="Tube timing">
+                  <button aria-pressed={!params.followSong} onClick={() => onChange({ ...params, followSong: false })}>
+                    Fixed rate
+                  </button>
+                  <button aria-pressed={params.followSong} onClick={() => onChange({ ...params, followSong: true })}>
+                    Follow the song
+                  </button>
+                </div>
+              </div>
+            )}
+            {PARAM_SPECS.filter((s) => s.group === group)
+              // Show only the timing control that applies to the current mode.
+              .filter((s) => (s.key === 'songSensitivity' ? params.followSong : s.key === 'tubesPerSecond' ? !params.followSong : true))
+              .map((spec) => (
               <label key={spec.key} className="tune-row">
                 <span>
                   {spec.label}

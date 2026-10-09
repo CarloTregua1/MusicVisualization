@@ -1,6 +1,14 @@
 /** Everything that defines how the tubes feel, tunable live from the Visualizer. */
 export interface TunnelParams {
-  /** Tubes born per second (each develops as the white rim for 1/rate s). */
+  /**
+   * Tube timing. false: a fixed number of tubes per second. true: follow the
+   * song — a new tube is born on each sound event (hit, note, change), and
+   * the white rim keeps developing until the next one.
+   */
+  followSong: boolean
+  /** In follow-the-song mode, how small an event can start a new tube (0 = only big hits, 1 = every small change). */
+  songSensitivity: number
+  /** Tubes born per second in fixed-rate mode (each develops as the white rim for 1/rate s). */
   tubesPerSecond: number
   /** Seconds a ring takes to spread from the rim to the edge of the land, at 120 BPM. */
   spreadSeconds: number
@@ -46,6 +54,8 @@ export interface TunnelParams {
 
 /** Starting point measured from the reference video's frames. */
 export const MEASURED_PARAMS: TunnelParams = {
+  followSong: false,
+  songSensitivity: 0.6,
   tubesPerSecond: 30,
   spreadSeconds: 3.4,
   tubeRadius: 0.013,
@@ -82,8 +92,11 @@ export const PRESETS: Record<string, TunnelParams> = {
   Previous: PREVIOUS_PARAMS,
 }
 
+/** Numeric parameters, the ones that get sliders. */
+export type NumericParam = { [K in keyof TunnelParams]: TunnelParams[K] extends number ? K : never }[keyof TunnelParams]
+
 export interface ParamSpec {
-  key: keyof TunnelParams
+  key: NumericParam
   label: string
   group: string
   min: number
@@ -92,6 +105,7 @@ export interface ParamSpec {
 }
 
 export const PARAM_SPECS: ParamSpec[] = [
+  { key: 'songSensitivity', label: 'Song sensitivity', group: 'Flow', min: 0, max: 1, step: 0.05 },
   { key: 'tubesPerSecond', label: 'Tubes per second', group: 'Flow', min: 2, max: 40, step: 1 },
   { key: 'spreadSeconds', label: 'Spread time (s)', group: 'Flow', min: 1, max: 16, step: 0.1 },
   { key: 'coherence', label: 'Coherence (s)', group: 'Flow', min: 0.01, max: 0.4, step: 0.01 },

@@ -26,6 +26,8 @@ const LIGHT_HEIGHT = 0.6
 const LIGHT_RESPONSE = 0.08
 /** Light that remains when the white tube is dark: practically none. */
 const AMBIENT = 0.05
+/** In follow-the-song mode, how long a new tube takes to rise into its shape (s). */
+const SONG_GROW_TIME = 0.06
 /** Bloom is computed at this fraction of the canvas size (downscale = cheap blur). */
 const BLOOM_SCALE = 0.25
 
@@ -178,11 +180,12 @@ export class FiberTunnel {
   }
 
   /**
-   * Advances by dt. While `playing`, a new white tube is born every 1/tubesPerSecond s
-   * and the previous one starts spreading outward. `lifetime` is the time a
-   * ring takes to grow from the rim to the edge of the land.
+   * Advances by dt. While `playing`, a new white tube is born — every
+   * 1/tubesPerSecond s, or in follow-the-song mode whenever `songEvent` is
+   * true — and the previous one starts spreading outward. `lifetime` is the
+   * time a ring takes to grow from the rim to the edge of the land.
    */
-  update(dt: number, input: FiberInput, playing: boolean, onset: number, lifetime: number) {
+  update(dt: number, input: FiberInput, playing: boolean, onset: number, lifetime: number, songEvent = false) {
     this.time += dt
     this.rollAngle = this.roll.update(dt)
     // The scene light is the white tube's brightness, which follows the music.
@@ -197,17 +200,19 @@ export class FiberTunnel {
     // developing white rim stays at the crater.
     const k = Math.log(R_MAX / R_RIM) / lifetime
     const grow = Math.exp(k * dt)
+    const followSong = this.params.followSong
     const develop = 1 / this.params.tubesPerSecond
     for (let i = 0; i < this.count; i++) {
       const t = this.tube(i)
       t.age += dt
-      if (i < this.count - 1 || t.age > develop) t.radius *= grow
+      // The rim stays put while it develops; in song mode, until the next event.
+      if (i < this.count - 1 || (!followSong && t.age > develop)) t.radius *= grow
     }
     while (this.count > 0 && this.tube(0).radius >= R_MAX) this.count--
 
     if (!playing) return
     const rim = this.count > 0 ? this.tube(this.count - 1) : null
-    if (!rim || rim.age >= develop) this.birth(input)
+    if (!rim || (followSong ? songEvent : rim.age >= develop)) this.birth(input)
     // The white tube keeps developing: it holds the loudest moment of its window.
     this.develop(this.tube(this.count - 1), input, onset)
   }
@@ -399,7 +404,7 @@ export class FiberTunnel {
     for (let i = 0; i < this.count; i++) {
       const t = this.tube(i)
       const R = t.radius
-      const growth = smooth(0, develop, t.age)
+      const growth = smooth(0, this.params.followSong ? SONG_GROW_TIME : develop, t.age)
       const amp = (0.4 + 0.6 * t.level) * (1 + 0.5 * t.onset) * growth
       const shift = Math.round((t.turn / (2 * Math.PI)) * P)
       const b = t.born
