@@ -9,10 +9,12 @@ import { HearMath, type ResynthState } from './components/HearMath'
 import { SpectrumPanel } from './components/SpectrumPanel'
 import { Transport } from './components/Transport'
 import { useCanvas } from './components/useCanvas'
+import { VisualizerView } from './components/VisualizerView'
 import { WaveformPanel } from './components/WaveformPanel'
 import { Analyzer } from './dsp/analyze'
 import { resynthesizeTrack, rms, rmsError, synthesize } from './dsp/resynth'
 import { PeakTracker } from './dsp/smoothing'
+import { analyzeTempo, type TempoTrack } from './dsp/tempo'
 import { readTheme } from './render/canvas'
 import { chainValue, drawEpicycles, Trace } from './render/epicyclesCanvas'
 import { termsToLatex } from './render/formula'
@@ -41,6 +43,9 @@ export default function App() {
   const [latex, setLatex] = useState<string | null>(null)
   const [rmsText, setRmsText] = useState('—')
   const [resynth, setResynth] = useState<ResynthState>({ status: 'idle' })
+  const [view, setView] = useState<'math' | 'visualizer'>('math')
+  const [tempo, setTempo] = useState<TempoTrack | null>(null)
+  const [tempoProgress, setTempoProgress] = useState(0)
 
   const settingsRef = useRef(settings)
   useEffect(() => {
@@ -71,6 +76,8 @@ export default function App() {
         resynthJob.current++
         setResynth({ status: 'idle' })
         player.load(loaded.buffer)
+        setTempo(null)
+        setTempoProgress(0)
         setAudio(loaded)
       } catch {
         setError(`Couldn't decode “${file.name}”. Try another format.`)
@@ -101,9 +108,35 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [player])
 
-  // The render loop: analysis at the playhead, then every canvas, every frame.
+  // Tempo curve for the visualizer, analysed in the background after load.
   useEffect(() => {
     if (!audio) return
+    const gen = analyzeTempo(audio.mono, audio.sampleRate)
+    let timer = 0
+    const step = () => {
+      const until = performance.now() + 10
+      let r = gen.next()
+      while (!r.done && performance.now() < until) r = gen.next()
+      if (r.done) setTempo(r.value)
+      else {
+        setTempoProgress(r.value)
+        timer = window.setTimeout(step, 0)
+      }
+    }
+    timer = window.setTimeout(step, 0)
+    return () => window.clearTimeout(timer)
+  }, [audio])
+
+  // The visualizer has its own loop; keep the clock moving for its transport.
+  useEffect(() => {
+    if (view !== 'visualizer') return
+    const id = window.setInterval(() => setTime(player.position()), 100)
+    return () => window.clearInterval(id)
+  }, [view, player])
+
+  // The render loop: analysis at the playhead, then every canvas, every frame.
+  useEffect(() => {
+    if (!audio || view !== 'math') return
     const { mono, sampleRate } = audio
     const analyzers = new Map<number, Analyzer>()
     const frames = new Map<number, { real: Float64Array; approx: Float64Array }>()
@@ -172,7 +205,7 @@ export default function App() {
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [audio, player, waveRef, specRef, epiRef])
+  }, [audio, view, player, waveRef, specRef, epiRef])
 
   const buildResynth = useCallback(() => {
     if (!audio) return
@@ -211,6 +244,16 @@ export default function App() {
         </h1>
         {audio && <span className="filename" title={audio.name}>{audio.name}</span>}
         <div className="spacer" />
+        {audio && (
+          <div className="seg" role="group" aria-label="View">
+            <button aria-pressed={view === 'math'} onClick={() => setView('math')}>
+              Math
+            </button>
+            <button aria-pressed={view === 'visualizer'} onClick={() => setView('visualizer')}>
+              Visualizer
+            </button>
+          </div>
+        )}
         {audio && <DropZone onFile={onFile} compact busy={loading} />}
       </header>
 
@@ -236,6 +279,22 @@ export default function App() {
             />
           </div>
         </main>
+      )}
+
+      {audio && view === 'visualizer' && (
+        <VisualizerView
+          player={player}
+          audio={audio}
+          tempo={tempo}
+          tempoProgress={tempoProgress}
+          playing={playing}
+          time={time}
+          onSeek={(t) => {
+            player.seek(t)
+            setTime(t)
+          }}
+          onExit={() => setView('math')}
+        />
       )}
 
       {audio && (
