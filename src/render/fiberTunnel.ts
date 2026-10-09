@@ -37,6 +37,12 @@ const MIN_BLACKOUT_GAP = 3
  * far too slow in WebKit/Safari.)
  */
 const COLOUR_STEPS = 4
+/** How strongly a tube's colour follows changes in the sound (gain on the deviation from the recent average). */
+const COLOUR_CONTRAST = 2.5
+/** Length of the "recent music" average that colour changes are measured against (s). */
+const COLOUR_MEMORY = 4
+/** How far a loud spot pulls a tube's colour toward its own frequency colour (0..1). */
+const LOCAL_COLOUR = 0.6
 /** Bloom is computed at this fraction of the canvas size (downscale = cheap blur). */
 const BLOOM_SCALE = 0.25
 
@@ -68,6 +74,13 @@ interface Tube {
   brightness: number
   /** Spectral flatness 0..1 (tonal → noisy). */
   noise: number
+  /**
+   * The tube's own colour, as a spectrum position 0 (bass, pink) … 1 (treble,
+   * mint): where the energy of its sound sits. Consecutive tubes differ as the
+   * music changes, so colours travel with the tubes instead of sitting at
+   * fixed angles.
+   */
+  colourPos: number
 }
 
 export interface FiberInput {
@@ -173,6 +186,7 @@ export class FiberTunnel {
       treble: 0,
       brightness: 0,
       noise: 0,
+      colourPos: 0.5,
     }))
     this.smoothBands = new Float32Array(bandCount)
     this.rawPeaks = new Float32Array(bandCount)
@@ -219,6 +233,15 @@ export class FiberTunnel {
     this.light += (target - this.light) * (1 - Math.exp(-dt / LIGHT_RESPONSE))
 
     const a = 1 - Math.exp(-dt / this.params.coherence)
+    // Track the music's typical colour position, for each tube's contrast.
+    if (playing && this.count > 0) {
+      const t = this.tube(this.count - 1)
+      const n = t.bands.length
+      let loudest = 0
+      for (let j = 1; j < n; j++) if (t.bands[j] > t.bands[loudest]) loudest = j
+      const own = 0.5 * t.brightness + 0.5 * (loudest / (n - 1))
+      this.colourMean += (own - this.colourMean) * (1 - Math.exp(-dt / COLOUR_MEMORY))
+    }
     const sb = this.smoothBands
     for (let i = 0; i < sb.length; i++) sb[i] += (input.bands[i] - sb[i]) * a
 
@@ -277,6 +300,9 @@ export class FiberTunnel {
     return true
   }
 
+  /** Running average of the sound's colour position (~COLOUR_MEMORY s), the reference for contrast. */
+  private colourMean = 0.4
+
   private birth(input: FiberInput) {
     if (this.count === MAX_TUBES) this.count--
     this.head = (this.head + 1) % MAX_TUBES
@@ -329,6 +355,15 @@ export class FiberTunnel {
     const mean = sum / n
     t.brightness = sum > 1e-6 ? weighted / sum / (n - 1) : 0
     t.noise = mean > 1e-3 ? Math.min(1, Math.exp(logSum / n) / (mean + 1e-3)) : 0
+    // Own colour: where its sound's energy sits (spectral centroid and loudest
+    // band), compared with the last few seconds of music and amplified, so
+    // changes in the sound swing the colour even in a uniform song; plus a
+    // slow drift through the palette.
+    let loudest = 0
+    for (let i = 1; i < n; i++) if (t.bands[i] > t.bands[loudest]) loudest = i
+    const own = 0.5 * t.brightness + 0.5 * (loudest / (n - 1))
+    const colourPos = 0.5 + (own - this.colourMean) * COLOUR_CONTRAST + 0.22 * Math.sin(t.born * 0.29)
+    t.colourPos = Math.min(1, Math.max(0, colourPos))
     // Walls rise at spectral peaks only: bands clearly louder than their
     // neighbours, and loud in absolute terms.
     for (let i = 0; i < n; i++) {
@@ -601,19 +636,18 @@ export class FiberTunnel {
       // Only the innermost tube is ever white; every other tube keeps its colour
       // (tubeColor caps their lightness so none can look white).
       const white = i === whiteIndex ? 1 : 0
-      // Per-tube variation, plus a shift with the brightness of its sound, so
-      // colours keep changing as the music's timbre does.
-      const tint = t.jitter * 16 + (t.brightness - 0.5) * 70 * pr.colourVariety
+      // A small per-tube hue variation, so neighbours stay distinguishable.
+      const tint = t.jitter * 16
       const width = Math.max(0.9, (2 * pr.tubeRadius * Math.pow(R / R_RIM, pr.thicknessGrowth) * focal) / zs[o + pc])
       const light = this.segLight[i * SEGMENTS + sg]
-      const pos = this.pos[(pc + shift + P * 4) % P]
-
       const rimWhite = white * this.light
-      const colour = (l: number) => tubeColor(t.temperature, depth, pos, tint, l, rimWhite, pr.colourVariety)
-      // Colour at point k of this tube: hue from its spot on the spectrum, light
-      // interpolated between segment centres, scaled by `factor`.
+      // Colour at point k: the tube's own colour, pulled toward the colour of
+      // that spot's frequency where that frequency is loud; light interpolated
+      // between segment centres, scaled by `factor`.
       const colourAtPoint = (k: number, factor: number) =>
-        tubeColor(t.temperature, depth, this.pos[(k + shift + P * 4) % P], tint, this.lightAt(i, k) * factor, rimWhite, pr.colourVariety)
+        tubeColor(t.temperature, depth, this.colourPosAt(t, k, shift), tint, this.lightAt(i, k) * factor, rimWhite, pr.colourVariety)
+      const colour = (l: number) =>
+        tubeColor(t.temperature, depth, this.colourPosAt(t, pc, shift), tint, l, rimWhite, pr.colourVariety)
       // Stroke one layer of this segment in COLOUR_STEPS pieces, each its own colour.
       const steps = (X: Float32Array, Y: Float32Array, off: number, factor: number) => {
         for (let q = 0; q < COLOUR_STEPS; q++) {
@@ -681,6 +715,20 @@ export class FiberTunnel {
     }
     lc.globalAlpha = 1
     lc.globalCompositeOperation = 'source-over'
+  }
+
+  /**
+   * Colour position (0 bass … 1 treble) at point k of tube t: its own colour,
+   * moved toward the frequency at that spot in proportion to how loud it is.
+   */
+  private colourPosAt(t: Tube, k: number, shift: number): number {
+    const P = POINTS
+    const bandPos = this.pos[(k + shift + P * 4) % P]
+    const last = t.bands.length - 1
+    const q = bandPos * last
+    const k0 = q | 0
+    const v = t.bands[k0] + (t.bands[Math.min(last, k0 + 1)] - t.bands[k0]) * (q - k0)
+    return t.colourPos + (bandPos - t.colourPos) * Math.min(1, v * 1.3) * LOCAL_COLOUR
   }
 
   /** Lighting at point k of tube i, interpolated between its segment centres. */

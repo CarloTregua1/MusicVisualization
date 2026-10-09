@@ -85,4 +85,18 @@ describe('tube timing', () => {
     expect(n).toBeGreaterThanOrEqual(5)
     expect(n).toBeLessThanOrEqual(16)
   })
+
+  it('colour: each tube takes its own colour from its sound, not from its angle', () => {
+    const t = new FiberTunnel(48)
+    t.params = { ...t.params, tubesPerSecond: 10 }
+    const bass = new Float32Array(48).map((_, i) => (i < 10 ? 0.9 : 0.1))
+    const treble = new Float32Array(48).map((_, i) => (i > 38 ? 0.9 : 0.1))
+    for (let f = 0; f < 12; f++) t.update(DT, { ...input, bands: bass }, true, 0, 30)
+    for (let f = 0; f < 12; f++) t.update(DT, { ...input, bands: treble }, true, 0, 30)
+    const tubes = t as unknown as { tube: (i: number) => { colourPos: number }; count: number }
+    const first = tubes.tube(0).colourPos
+    const lastPos = tubes.tube(tubes.count - 1).colourPos
+    expect(first).toBeLessThan(0.45) // bass-heavy tube: pink side
+    expect(lastPos).toBeGreaterThan(first + 0.25) // treble-heavy tube: toward cyan/mint
+  })
 })
