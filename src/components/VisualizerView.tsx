@@ -100,7 +100,9 @@ export function VisualizerView({ player, audio, tempo, tempoProgress, playing, t
       input.level = level
 
       const lifetime = Math.min(3.4, Math.max(1.4, 2.6 * (120 / shownBpm)))
-      tunnel.update(dt, input, lifetime, 0.25 + 0.5 * temp)
+      // One string per half beat.
+      const spawnInterval = Math.min(0.45, Math.max(0.18, 30 / shownBpm))
+      tunnel.update(dt, input, lifetime, 0.25 + 0.5 * temp, spawnInterval)
       tunnel.render(ctx)
 
       if (now - lastHud > 250) {

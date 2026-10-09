@@ -1,10 +1,9 @@
 import { neon } from './neon'
 
-const MAX_RINGS = 160
-const POINTS = 144
+const MAX_RINGS = 48
+const POINTS = 320
 /** Kaleidoscope symmetry: the spectrum is mirrored this many times around each ring. */
 const FOLDS = 6
-const SPAWN_INTERVAL = 1 / 40
 /** Colour stops per mirrored half-segment of a ring's conic gradient. */
 const STOPS_PER_HALF = 5
 
@@ -16,6 +15,10 @@ interface Ring {
   lobes: number
   temperature: number
   beat: number
+  /** Mean level of the top bands, drives the fine shimmer on the string. */
+  treble: number
+  /** Seconds since birth, for the string's vibration. */
+  age: number
   angle: number
   gradient: CanvasGradient | null
 }
@@ -46,11 +49,12 @@ export interface TunnelInput {
 }
 
 /**
- * A neon tunnel of concentric spectral shapes. Each ring is a snapshot of
- * the spectrum taken when it was born at the hollow centre; rings then
- * travel outward with perspective, so the innermost ring is always the sound
- * playing now. A feedback pass (the previous frame redrawn slightly zoomed
- * and rotated) leaves self-similar trails, in the spirit of MilkDrop.
+ * A neon tunnel of concentric spectral strings. A string is born at the
+ * hollow centre every `spawnInterval` seconds; until the next one is born it
+ * keeps following the live sound, then it freezes that spectrum and travels
+ * outward with perspective, vibrating like a plucked string as it goes. So
+ * the innermost string is always the sound playing now. A short feedback
+ * pass (last frame redrawn slightly zoomed) adds faint self-similar trails.
  */
 export class Tunnel {
   private readonly rings: Ring[]
@@ -60,7 +64,6 @@ export class Tunnel {
   private angle = 0
   private time = 0
   private beatGlow = 0
-  private lastTemperature = 0.5
   private readonly fold: Float32Array
   private readonly cos: Float32Array
   private readonly sin: Float32Array
@@ -75,6 +78,8 @@ export class Tunnel {
       lobes: 0,
       temperature: 0.5,
       beat: 0,
+      treble: 0,
+      age: 0,
       angle: 0,
       gradient: null,
     }))
@@ -101,25 +106,30 @@ export class Tunnel {
    * `lifetime` is how long a ring takes to reach the edge; `spin` is the
    * rotation rate of newly born rings in rad/s.
    */
-  update(dt: number, input: TunnelInput, lifetime: number, spin: number) {
+  update(dt: number, input: TunnelInput, lifetime: number, spin: number, spawnInterval: number) {
     this.time += dt
     this.angle += dt * spin
     this.beatGlow = Math.max(input.beat, this.beatGlow * Math.exp(-dt * 6))
-    this.lastTemperature = input.temperature
     const step = dt / lifetime
-    for (let i = 0; i < this.count; i++) this.ring(i).u += step
+    for (let i = 0; i < this.count; i++) {
+      const r = this.ring(i)
+      r.u += step
+      r.age += dt
+    }
 
     while (this.count > 0 && this.ring(0).u >= 1) {
       this.count--
     }
     this.spawnAcc += dt
     let spawned = 0
-    while (this.spawnAcc >= SPAWN_INTERVAL) {
-      this.spawnAcc -= SPAWN_INTERVAL
+    while (this.spawnAcc >= spawnInterval || this.count === 0) {
+      this.spawnAcc = Math.max(0, this.spawnAcc - spawnInterval)
       // Spread rings born in one frame so a slow frame doesn't stack them.
       this.spawn(input, this.spawnAcc / lifetime + spawned * 1e-4)
       spawned++
     }
+    // The newest string stays live: it tracks the current sound until the next is born.
+    this.capture(this.rings[this.head], input)
   }
 
   /** i-th live ring, oldest first. */
@@ -132,13 +142,24 @@ export class Tunnel {
     this.head = (this.head + 1) % MAX_RINGS
     this.count++
     const r = this.rings[this.head]
-    r.bands.set(input.bands)
     r.u = u
+    r.age = 0
+    r.beat = 0
+    r.angle = this.angle
+    this.capture(r, input)
+  }
+
+  private capture(r: Ring, input: TunnelInput) {
+    r.bands.set(input.bands)
     r.level = input.level
     r.lobes = input.lobes
     r.temperature = input.temperature
-    r.beat = input.beat
-    r.angle = this.angle
+    r.beat = Math.max(r.beat, input.beat)
+    const b = input.bands
+    const from = Math.floor(b.length * 0.6)
+    let t = 0
+    for (let i = from; i < b.length; i++) t += b[i]
+    r.treble = t / (b.length - from)
     r.gradient = null
   }
 
@@ -186,7 +207,7 @@ export class Tunnel {
     ctx.rotate(0.004 * Math.sin(this.time * 0.37))
     const zoom = 1.016 + 0.02 * this.beatGlow
     ctx.scale(zoom, zoom)
-    ctx.globalAlpha = 0.8
+    ctx.globalAlpha = 0.5
     ctx.drawImage(fb, -cx, -cy, W, H)
     ctx.restore()
 
@@ -201,8 +222,14 @@ export class Tunnel {
       if (alpha <= 0.002) continue
       const base = hole + (reach * 1.08 - hole) * Math.pow(u, 1.8)
       const shape = 0.16 + 0.2 * u
-      const wobble = 0.045 * (0.3 + r.level)
-      const intensity = (0.35 + 0.65 * r.level) * (1 + 0.7 * r.beat)
+      const intensity = (0.45 + 0.55 * r.level) * (1 + 0.6 * r.beat)
+      // Plucked-string vibration: a standing wave whose mode is the note's
+      // lobe count, ringing and decaying with age, plus a faster treble shimmer.
+      const pluck = Math.exp(-r.age * 1.1) * (0.35 + r.level + 0.8 * r.beat)
+      const swing = 0.06 * pluck * Math.cos(2 * Math.PI * 1.6 * r.age)
+      const shimmer = 0.018 * r.treble * Math.exp(-r.age * 0.6)
+      const shimmerMode = 2 * r.lobes + 1
+      const shimmerPhase = 7 * r.age
 
       ctx.save()
       ctx.translate(cx, cy)
@@ -214,7 +241,12 @@ export class Tunnel {
         const f = pos - k
         const v = r.bands[k] * (1 - f) + r.bands[Math.min(bandsMax, k + 1)] * f
         const th = (p / POINTS) * 2 * Math.PI
-        const rad = base * (1 + shape * (v - 0.4) + wobble * Math.sin(r.lobes * th))
+        const rad =
+          base *
+          (1 +
+            shape * (v - 0.4) +
+            swing * Math.sin(r.lobes * th) +
+            shimmer * Math.sin(shimmerMode * th - shimmerPhase))
         const x = rad * this.cos[p]
         const y = rad * this.sin[p]
         if (p === 0) ctx.moveTo(x, y)
@@ -223,17 +255,17 @@ export class Tunnel {
       ctx.closePath()
       r.gradient ??= this.gradientFor(ctx, r)
       ctx.strokeStyle = r.gradient
-      // Wide faint stroke for the glow, then a thin bright core.
-      ctx.globalAlpha = 0.16 * alpha * intensity
-      ctx.lineWidth = (3 + 14 * u) * px * (1 + r.beat)
+      // A thin bright string with a narrow halo.
+      ctx.globalAlpha = 0.14 * alpha * intensity
+      ctx.lineWidth = (3 + 3 * u) * px
       ctx.stroke()
-      ctx.globalAlpha = Math.min(1, 0.95 * alpha * intensity)
-      ctx.lineWidth = (0.9 + 2.6 * u) * px
+      ctx.globalAlpha = Math.min(1, alpha * intensity)
+      ctx.lineWidth = (0.9 + 0.9 * u) * px
       ctx.stroke()
       ctx.restore()
     }
 
-    // The hollow core, with a thin pulsing rim.
+    // The hollow core.
     ctx.globalCompositeOperation = 'source-over'
     ctx.globalAlpha = 1
     const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, hole * 1.5)
@@ -242,13 +274,6 @@ export class Tunnel {
     core.addColorStop(1, 'rgba(0,0,0,0)')
     ctx.fillStyle = core
     ctx.fillRect(cx - hole * 1.5, cy - hole * 1.5, hole * 3, hole * 3)
-    ctx.globalCompositeOperation = 'lighter'
-    ctx.strokeStyle = neon(this.lastTemperature, 0.15, 70)
-    ctx.globalAlpha = 0.25 + 0.6 * this.beatGlow
-    ctx.lineWidth = 1.2 * px
-    ctx.beginPath()
-    ctx.arc(cx, cy, hole * 0.92, 0, Math.PI * 2)
-    ctx.stroke()
 
     // Vignette, which also keeps the feedback from saturating at the edges.
     ctx.globalCompositeOperation = 'source-over'
