@@ -17,9 +17,19 @@ const BONES = {
 /** Moves switch only on multiples of this many beats. */
 export const BEATS_PER_MOVE = 8
 /** A new move fades in over this fraction of a beat. */
-const CROSSFADE_BEATS = 0.5
-/** How quickly joints follow their targets (s): smooths every change without lag. */
-const FOLLOW = 0.035
+const CROSSFADE_BEATS = 1
+/**
+ * Joints move like critically damped springs toward their targets: natural
+ * frequency (rad/s) — about a 0.25 s settle, so motion accelerates and
+ * decelerates like a body rather than snapping.
+ */
+const SPRING = 14
+/** Fastest a joint may turn, rad/s: roughly a quick human limb. */
+export const MAX_JOINT_SPEED = 9
+/** Fastest the body may shift or lift, figure heights per second. */
+const MAX_BODY_SPEED = 0.9
+/** Above this tempo the dancer moves on every other beat (half time), as people do. */
+const HALF_TIME_BPM = 130
 
 export type MoveName = 'idle' | 'bounce' | 'pump' | 'sidestep' | 'wave' | 'jump'
 const DANCE_MOVES: MoveName[] = ['bounce', 'pump', 'sidestep', 'wave', 'jump']
@@ -65,8 +75,8 @@ const IDLE: Pose = {
 
 const KEYS = Object.keys(IDLE) as (keyof Pose)[]
 
-/** Sharp hit on the beat that decays over it. */
-const pulse = (p: number) => Math.exp(-6 * p)
+/** Accent on the beat: rises quickly but smoothly, then eases out over the beat. */
+const pulse = (p: number) => Math.sin(Math.PI * Math.min(1, Math.pow(p, 0.6)))
 /** Smooth 0 → 1 → 0 over the beat. */
 const swell = (p: number) => 0.5 - 0.5 * Math.cos(2 * Math.PI * p)
 
@@ -261,6 +271,8 @@ export class Dancer {
   /** Beat index at which the current move started. */
   private moveStart = -Infinity
   private pose: Pose = { ...IDLE }
+  /** Joint velocities for the spring motion. */
+  private vel: Pose = Object.fromEntries(Object.keys(IDLE).map((k) => [k, 0])) as unknown as Pose
   private energy = 0
   private accent = 0
   /** Colour position (0 bass pink … 1 treble mint), smoothed. */
@@ -275,7 +287,11 @@ export class Dancer {
   }
 
   update(dt: number, input: DancerInput, style: DancerStyle) {
-    const { beat } = input
+    // Half time for fast music: one dance beat spans two musical beats.
+    const half = beat0HalfTime(input.beat.period)
+    const beat = half
+      ? { index: Math.floor(input.beat.index / 2), phase: ((input.beat.index & 1) + input.beat.phase) / 2, period: input.beat.period * 2 }
+      : input.beat
     // Energy: loudness, smoothed, scaled by the style.
     const target = Math.min(1, input.level * 1.25 * style.energy)
     this.energy += (target - this.energy) * (1 - Math.exp(-dt / 0.25))
@@ -296,13 +312,26 @@ export class Dancer {
     const e = this.energy
     const a = movePose(this.prevMove, beat.phase, beat.index, e)
     const b = movePose(this.move, beat.phase, beat.index, e)
-    const k = 1 - Math.exp(-dt / FOLLOW)
+    // Sub-step the springs so large frame times stay stable.
+    const steps = Math.max(1, Math.ceil(dt / (1 / 120)))
+    const h = dt / steps
     for (const key of KEYS) {
       let goal = a[key] + (b[key] - a[key]) * mix
       // Onsets add a quick extra lift and flare.
       if (key === 'lift') goal += 0.025 * this.accent * e
       if (key === 'armL' || key === 'armR') goal += 0.25 * this.accent * e
-      this.pose[key] += (goal - this.pose[key]) * k
+      const maxSpeed = key === 'sway' || key === 'lift' ? MAX_BODY_SPEED : MAX_JOINT_SPEED
+      let x = this.pose[key]
+      let v = this.vel[key]
+      for (let n = 0; n < steps; n++) {
+        // Critically damped spring: a = ω²(goal − x) − 2ω·v.
+        v += (SPRING * SPRING * (goal - x) - 2 * SPRING * v) * h
+        if (v > maxSpeed) v = maxSpeed
+        else if (v < -maxSpeed) v = -maxSpeed
+        x += v * h
+      }
+      this.pose[key] = x
+      this.vel[key] = v
     }
 
     // Colour follows the sound's brightness, smoothed so it glides.
@@ -335,6 +364,11 @@ export class Dancer {
   colour(temperature: number, light: number, variety: number): string {
     return tubeColor(temperature, 0.15, this.colourPos, 0, light, 0, variety)
   }
+}
+
+/** Whether a beat of this length (s) is fast enough to dance in half time. */
+function beat0HalfTime(period: number): boolean {
+  return period > 0 && 60 / period > HALF_TIME_BPM
 }
 
 /** Bones to draw, as chains of joints (each drawn as one tube). */
