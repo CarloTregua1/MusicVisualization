@@ -163,7 +163,7 @@ export function VisualizerView({ player, audio, tempo, beats, tempoProgress, pla
       frames++
       // Background: the complement of the tubes' average colour, so they pop.
       const tubesHue = tubeHue(temp, 0.4, tunnel.meanColourPos, paramsRef.current.colourVariety)
-      const bgHue = ((tubesHue + 180) * Math.PI) / 180
+      const bgHue = ((tubesHue + 180 + paramsRef.current.backgroundHueShift) * Math.PI) / 180
       const kb = 1 - Math.exp(-realDt / 1.2)
       bgX += (Math.cos(bgHue) - bgX) * kb
       bgY += (Math.sin(bgHue) - bgY) * kb
@@ -173,10 +173,17 @@ export function VisualizerView({ player, audio, tempo, beats, tempoProgress, pla
         level: player.playing ? level : 0,
         beat,
         strength: paramsRef.current.background,
+        saturation: paramsRef.current.backgroundSaturation,
+        clouds: paramsRef.current.backgroundClouds,
+        particles: paramsRef.current.backgroundParticles,
         light: st0.light,
         craterX: st0.x,
         craterY: st0.y,
         craterRadius: st0.rimRadius,
+        field: tunnel.field,
+        roll: st0.roll,
+        rollX: st0.rollX,
+        rollY: st0.rollY,
       })
       tunnel.render(ctx)
 

@@ -130,6 +130,12 @@ export class FiberTunnel {
    * scene light.
    */
   stage = { x: 0, y: 0, rimRadius: 0, roll: 0, rollX: 0, rollY: 0, light: 0 }
+  /**
+   * Outline of the tube field after the last render (screen space before the
+   * camera roll in stage): the union of the visible rings' filled outlines.
+   * The background is clipped to it, so its colour only shows between tubes.
+   */
+  field: Path2D | null = null
   /** Average colour position of the visible tubes (0 bass pink … 1 treble mint). */
   meanColourPos = 0.4
   /** Live-tunable look; see tunnelParams.ts. */
@@ -581,6 +587,25 @@ export class FiberTunnel {
       const zc = Math.max(0.25, dx * fx + dy * fy + dz * fz)
       lightSX = cx + (focal * (dx * rx + dz * rz)) / zc
       lightSY = cy - (focal * (dx * ux + dy * uy + dz * uz)) / zc
+    }
+
+    // The tube field's outline, for the background: the union of every few
+    // visible rings' filled outlines (rings nest, so this covers the field).
+    {
+      const path = new Path2D()
+      let any = false
+      for (let i = 0; i < this.count; i++) {
+        const R = this.tube(i).radius
+        const depth = Math.log(R / R_RIM) / logSpan
+        const fade = (1 - smooth(0.85, 1, depth)) * (1 - smooth(0.7, 0.95, R / camDistance))
+        if (fade < 0.25 || (i % 3 !== 0 && i !== this.count - 1)) continue
+        const o = i * P
+        path.moveTo(xs[o], ys[o])
+        for (let p = 1; p < P; p++) path.lineTo(xs[o + p], ys[o + p])
+        path.closePath()
+        any = true
+      }
+      this.field = any ? path : null
     }
 
     // Depth-sort every segment of every tube, far to near.
