@@ -219,15 +219,25 @@ const HEAD_STARS = (() => {
   return { stars, edges }
 })()
 
-/** A glowing star: soft halo plus a bright core. */
+/**
+ * A glowing star: a faint wide halo, a softer middle and a bright core —
+ * three plain circles (much cheaper than a gradient per star, per frame).
+ */
 function star(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, inner: string, outer: string, alpha: number) {
-  const g = ctx.createRadialGradient(x, y, 0, x, y, r * 3)
-  g.addColorStop(0, inner)
-  g.addColorStop(0.25, outer)
-  g.addColorStop(1, 'rgba(0,0,0,0)')
+  ctx.fillStyle = outer
+  ctx.globalAlpha = 0.12 * alpha
+  ctx.beginPath()
+  ctx.arc(x, y, r * 2.6, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.globalAlpha = 0.35 * alpha
+  ctx.beginPath()
+  ctx.arc(x, y, r * 1.5, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.fillStyle = inner
   ctx.globalAlpha = alpha
-  ctx.fillStyle = g
-  ctx.fillRect(x - r * 3, y - r * 3, r * 6, r * 6)
+  ctx.beginPath()
+  ctx.arc(x, y, r * 0.75, 0, Math.PI * 2)
+  ctx.fill()
 }
 
 /**
@@ -267,6 +277,16 @@ function paintConstellation(c: SkinContext) {
     return { x: hx + (x0 * cr - y0 * sr) * rx, y: hy + (x0 * sr + y0 * cr) * ry }
   })
 
+  // A patch of night sky behind the head, so the star cloud reads against
+  // the bright tubes beyond it.
+  {
+    const g = ctx.createRadialGradient(hx, hy, rx * 0.4, hx, hy, rx * 2.4)
+    g.addColorStop(0, 'rgba(2,2,6,0.9)')
+    g.addColorStop(1, 'rgba(2,2,6,0)')
+    ctx.globalAlpha = alpha
+    ctx.fillStyle = g
+    ctx.fillRect(hx - rx * 2.4, hy - rx * 2.4, rx * 4.8, rx * 4.8)
+  }
   ctx.globalCompositeOperation = 'lighter'
   // Faint nebula behind the head.
   {
@@ -279,9 +299,9 @@ function paintConstellation(c: SkinContext) {
   }
 
   // Body threads, the neck reaching up into the cloud.
-  ctx.globalAlpha = Math.min(1, 0.55 * alpha)
-  ctx.strokeStyle = colour(light * 0.9)
-  ctx.lineWidth = Math.max(1, c.H * 0.006)
+  ctx.globalAlpha = Math.min(1, 0.75 * alpha)
+  ctx.strokeStyle = colour(light * 1.0)
+  ctx.lineWidth = Math.max(1.2, c.H * 0.01)
   ctx.beginPath()
   for (const [a, b] of bones) {
     ctx.moveTo(X(sk[a]), Y(sk[a]))
@@ -292,8 +312,8 @@ function paintConstellation(c: SkinContext) {
   ctx.stroke()
 
   // Threads inside the head cloud.
-  ctx.globalAlpha = Math.min(1, 0.35 * alpha)
-  ctx.lineWidth = Math.max(0.7, c.H * 0.003)
+  ctx.globalAlpha = Math.min(1, 0.5 * alpha)
+  ctx.lineWidth = Math.max(0.8, c.H * 0.0045)
   ctx.beginPath()
   for (const [i, j] of HEAD_STARS.edges) {
     ctx.moveTo(pts[i].x, pts[i].y)
@@ -305,14 +325,14 @@ function paintConstellation(c: SkinContext) {
   for (const name of Object.keys(sk) as (keyof Skeleton)[]) {
     if (name === 'head') continue
     const big = name.startsWith('hand') || name.startsWith('foot')
-    const r = c.H * (big ? 0.026 : 0.016)
+    const r = c.H * (big ? 0.036 : 0.024)
     star(ctx, X(sk[name]), Y(sk[name]), r, colour(light * 1.3), colour(light * 1.1), alpha)
   }
 
   // Head stars, each twinkling at its own pace.
   HEAD_STARS.stars.forEach((st, i) => {
     const tw = 0.55 + 0.45 * Math.sin(time * st.speed + st.phase)
-    const r = c.H * 0.009 * st.size * (0.75 + 0.35 * tw) * (1 + 0.25 * beat)
+    const r = c.H * 0.013 * st.size * (0.75 + 0.35 * tw) * (1 + 0.25 * beat)
     star(ctx, pts[i].x, pts[i].y, r, colour(light * (1.1 + 0.3 * tw)), colour(light * 0.9), alpha * (0.6 + 0.4 * tw))
   })
 

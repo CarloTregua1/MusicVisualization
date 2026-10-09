@@ -447,9 +447,23 @@ export function drawDancer(
   ctx.save()
   ctx.setTransform(c, s, -s, c, stage.rollX - stage.rollX * c + stage.rollY * s, stage.rollY - stage.rollX * s - stage.rollY * c)
 
+  // Skins made of light (stars) echo and reflect as faint copies of themselves;
+  // solid skins as soft silhouettes.
+  const skin = fx.skin ?? 'neon'
+  const ghostInSkin = skin === 'constellation'
+  const ghost = (pose: Skeleton, strength: number) =>
+    paintSkin(skin, { ctx, sk: pose, X, Y, H, k, colour, light: light * strength, sceneLight: stage.light * strength, time: dancer.time })
+
   // Reflection on the crater floor: the body mirrored below the feet,
   // squashed by the viewing angle, faint.
-  if (fx.reflection > 0.01) {
+  if (fx.reflection > 0.01 && ghostInSkin) {
+    ctx.save()
+    ctx.translate(0, stage.y)
+    ctx.scale(1, -0.42)
+    ctx.translate(0, -stage.y)
+    ghost(sk, 0.35 * fx.reflection)
+    ctx.restore()
+  } else if (fx.reflection > 0.01) {
     ctx.save()
     ctx.translate(0, stage.y)
     ctx.scale(1, -0.42)
@@ -462,7 +476,12 @@ export function drawDancer(
   }
 
   // Echoes: fading copies a quarter and a half beat behind.
-  if (fx.echoes > 0.01) {
+  if (fx.echoes > 0.01 && ghostInSkin) {
+    for (const [beats, alpha] of [[0.5, 0.3], [0.25, 0.45]] as const) {
+      const past = dancer.pastSkeleton(beats * dancer.beatPeriod)
+      if (past) ghost(past, alpha * fx.echoes)
+    }
+  } else if (fx.echoes > 0.01) {
     ctx.globalCompositeOperation = 'lighter'
     for (const [beats, alpha] of [[0.5, 0.22], [0.25, 0.34]] as const) {
       const past = dancer.pastSkeleton(beats * dancer.beatPeriod)
@@ -499,6 +518,6 @@ export function drawDancer(
   }
 
   // The body itself, in the chosen skin.
-  paintSkin(fx.skin ?? 'neon', { ctx, sk, X, Y, H, k, colour, light, sceneLight: stage.light, time: dancer.time })
+  paintSkin(skin, { ctx, sk, X, Y, H, k, colour, light, sceneLight: stage.light, time: dancer.time })
   ctx.restore()
 }
