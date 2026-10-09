@@ -415,13 +415,17 @@ export class FiberTunnel {
     t.brightness = sum > 1e-6 ? weighted / sum / (n - 1) : 0
     t.noise = mean > 1e-3 ? Math.min(1, Math.exp(logSum / n) / (mean + 1e-3)) : 0
     // Own colour: where its sound's energy sits (spectral centroid and loudest
-    // band), compared with the last few seconds of music and amplified, so
-    // changes in the sound swing the colour even in a uniform song; plus a
-    // slow drift through the palette.
+    // band). Relative: compared with the last few seconds of music and
+    // amplified, so changes in the sound swing the colour even in a uniform
+    // song. Absolute: the frequency itself, so bass is always pink and treble
+    // always mint. colourAbsolute blends the two; an optional slow drift
+    // wanders through the palette.
     let loudest = 0
     for (let i = 1; i < n; i++) if (t.bands[i] > t.bands[loudest]) loudest = i
     const own = 0.5 * t.brightness + 0.5 * (loudest / (n - 1))
-    const colourPos = 0.5 + (own - this.colourMean) * COLOUR_CONTRAST + 0.22 * Math.sin(t.born * 0.29)
+    const relative = 0.5 + (own - this.colourMean) * COLOUR_CONTRAST
+    const drift = this.params.colourDrift ? 0.22 * Math.sin(t.born * 0.29) : 0
+    const colourPos = relative + (own - relative) * this.params.colourAbsolute + drift
     t.colourPos = Math.min(1, Math.max(0, colourPos))
     // Walls rise at spectral peaks only: bands clearly louder than their
     // neighbours, and loud in absolute terms.

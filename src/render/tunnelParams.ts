@@ -68,6 +68,14 @@ export interface TunnelParams {
   fill: number
   /** Colour from frequency (0 = age ramp only, 1 = fully by frequency). */
   colourVariety: number
+  /**
+   * How frequency maps to colour: 0 = relative (compared with the last few
+   * seconds, so the colour follows changes in the sound), 1 = absolute (bass
+   * always pink, treble always mint).
+   */
+  colourAbsolute: number
+  /** A slow drift through the palette on top of the frequency colour. */
+  colourDrift: boolean
   /** Random moments per minute when the light cuts out while music plays (0 = never). */
   blackoutsPerMinute: number
   /** Average length of a blackout, seconds. */
@@ -136,6 +144,8 @@ export const MEASURED_PARAMS: TunnelParams = {
   edgeGlow: 0.5,
   fill: 0.12,
   colourVariety: 0.6,
+  colourAbsolute: 0,
+  colourDrift: true,
   blackoutsPerMinute: 4,
   blackoutLength: 0.7,
   dancerOn: true,
@@ -216,6 +226,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   { key: 'blackoutsPerMinute', label: 'Blackouts per minute', group: 'Light', min: 0, max: 20, step: 0.5 },
   { key: 'blackoutLength', label: 'Blackout length (s)', group: 'Light', min: 0.1, max: 3, step: 0.05 },
   { key: 'colourVariety', label: 'Colour variety', group: 'Colour', min: 0, max: 1, step: 0.05 },
+  { key: 'colourAbsolute', label: 'Fixed frequency colours', group: 'Colour', min: 0, max: 1, step: 0.05 },
   { key: 'dancerSize', label: 'Size', group: 'Dancer', min: 0.2, max: 1.2, step: 0.05 },
   { key: 'dancerEnergy', label: 'Energy', group: 'Dancer', min: 0, max: 2, step: 0.05 },
   { key: 'dancerThickness', label: 'Thickness', group: 'Dancer', min: 0.01, max: 0.08, step: 0.005 },

@@ -67,4 +67,18 @@ describe('applyLfos', () => {
     const free = withLfos([lfo({ sync: false, hz: 0.5 })], { wallHeight: 2.5 })
     expect(applyLfos(free, { beats: 0, seconds: 0.5 }).wallHeight).toBeCloseTo(2.5 + 2.5)
   })
+
+  it('switches the dancer off for depth of each cycle', () => {
+    // Saw up over one bar: below 2·0.25 − 1 = −0.5 for the first quarter of the bar.
+    const base = withLfos([lfo({ target: 'dancerOn', shape: 'sawUp', depth: 0.25 })], { dancerOn: true })
+    expect(applyLfos(base, { beats: 0.5, seconds: 0 }).dancerOn).toBe(false)
+    expect(applyLfos(base, { beats: 1.5, seconds: 0 }).dancerOn).toBe(true)
+    expect(applyLfos(base, { beats: 4.5, seconds: 0 }).dancerOn).toBe(false)
+  })
+
+  it('switches a dancer that is off on instead', () => {
+    const base = withLfos([lfo({ target: 'dancerOn', shape: 'square', depth: 0.5 })], { dancerOn: false })
+    expect(applyLfos(base, { beats: 1, seconds: 0 }).dancerOn).toBe(false)
+    expect(applyLfos(base, { beats: 3, seconds: 0 }).dancerOn).toBe(true)
+  })
 })

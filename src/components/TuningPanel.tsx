@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { SKINS, type SkinName } from '../render/dancerSkins'
-import { LFO_HZ_MAX, LFO_HZ_MIN, LFO_LENGTHS, LFO_SHAPES, type Lfo } from '../render/lfo'
-import { PARAM_SPECS, PRESETS, type NumericParam, type TunnelParams } from '../render/tunnelParams'
+import { LFO_HZ_MAX, LFO_HZ_MIN, LFO_LENGTHS, LFO_SHAPES, TOGGLE_TARGETS, isToggle, type Lfo, type LfoTarget } from '../render/lfo'
+import { PARAM_SPECS, PRESETS, type TunnelParams } from '../render/tunnelParams'
 
 interface Props {
   params: TunnelParams
@@ -41,7 +41,7 @@ export function TuningPanel({ params, live, fps, onChange, onClose }: Props) {
     return () => cancelAnimationFrame(raf)
   }, [live])
 
-  const modulated = new Set<NumericParam>(params.lfos.filter((l) => l.on && l.depth > 0).map((l) => l.target))
+  const modulated = new Set<LfoTarget>(params.lfos.filter((l) => l.on && l.depth > 0).map((l) => l.target))
   const setLfo = (i: number, change: Partial<Lfo>) =>
     onChange({ ...params, lfos: params.lfos.map((l, j) => (j === i ? { ...l, ...change } : l)) })
 
@@ -87,12 +87,12 @@ export function TuningPanel({ params, live, fps, onChange, onClose }: Props) {
                 <select
                   className="tune-select"
                   value={lfo.target}
-                  onChange={(e) => setLfo(i, { target: e.target.value as NumericParam })}
+                  onChange={(e) => setLfo(i, { target: e.target.value as LfoTarget })}
                   aria-label={`LFO ${i + 1} target`}
                 >
                   {groups.map((group) => (
                     <optgroup key={group} label={group}>
-                      {PARAM_SPECS.filter((s) => s.group === group).map((s) => (
+                      {[...TOGGLE_TARGETS, ...PARAM_SPECS].filter((s) => s.group === group).map((s) => (
                         <option key={s.key} value={s.key}>
                           {s.label}
                         </option>
@@ -149,10 +149,17 @@ export function TuningPanel({ params, live, fps, onChange, onClose }: Props) {
                     )}
                   </div>
                   <label className="tune-row">
-                    <span>
-                      Depth
-                      <b>{lfo.depth.toFixed(2)}</b>
-                    </span>
+                    {isToggle(lfo.target) ? (
+                      <span>
+                        {params[lfo.target] ? 'Off' : 'On'} for
+                        <b>{Math.round(lfo.depth * 100)}% of the cycle</b>
+                      </span>
+                    ) : (
+                      <span>
+                        Depth
+                        <b>{lfo.depth.toFixed(2)}</b>
+                      </span>
+                    )}
                     <input
                       type="range"
                       min={0}
@@ -196,9 +203,27 @@ export function TuningPanel({ params, live, fps, onChange, onClose }: Props) {
                 </div>
               </div>
             )}
+            {group === 'Colour' && (
+              <div className="tune-row">
+                <span>Palette drift</span>
+                <div className="seg tune-seg" role="group" aria-label="Palette drift">
+                  <button aria-pressed={params.colourDrift} onClick={() => onChange({ ...params, colourDrift: true })}>
+                    On
+                  </button>
+                  <button aria-pressed={!params.colourDrift} onClick={() => onChange({ ...params, colourDrift: false })}>
+                    Off
+                  </button>
+                </div>
+              </div>
+            )}
             {group === 'Dancer' && (
               <div className="tune-row">
-                <span>Dancer</span>
+                <span>
+                  <em>
+                    Dancer
+                    {modulated.has('dancerOn') && <i className="lfo-tag">LFO</i>}
+                  </em>
+                </span>
                 <div className="seg tune-seg" role="group" aria-label="Dancer">
                   <button aria-pressed={params.dancerOn} onClick={() => onChange({ ...params, dancerOn: true })}>
                     On

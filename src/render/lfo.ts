@@ -10,11 +10,25 @@ export const LFO_SHAPES: { shape: LfoShape; symbol: string; label: string }[] = 
   { shape: 'square', symbol: '⊓', label: 'Square' },
 ]
 
-/** A low-frequency oscillator that sweeps one slider around its set value. */
+/** On/off settings an LFO can switch, besides the sliders. */
+export type ToggleParam = 'dancerOn'
+
+export const TOGGLE_TARGETS: { key: ToggleParam; label: string; group: string }[] = [
+  { key: 'dancerOn', label: 'Dancer on/off', group: 'Dancer' },
+]
+
+export type LfoTarget = NumericParam | ToggleParam
+
+export const isToggle = (target: LfoTarget): target is ToggleParam => TOGGLE_TARGETS.some((t) => t.key === target)
+
+/**
+ * A low-frequency oscillator that sweeps one slider around its set value, or
+ * switches an on/off setting for part of each cycle.
+ */
 export interface Lfo {
   on: boolean
-  /** The slider it moves. */
-  target: NumericParam
+  /** The slider it moves, or the setting it switches. */
+  target: LfoTarget
   shape: LfoShape
   /** true: the cycle is `beats` long on the song's beat grid; false: `hz` cycles per second. */
   sync: boolean
@@ -22,7 +36,10 @@ export interface Lfo {
   beats: number
   /** Cycles per second when free. */
   hz: number
-  /** How far it swings, as a fraction of the slider's half-range, 0..1. */
+  /**
+   * Sliders: how far it swings, as a fraction of the slider's half-range.
+   * Toggles: the share of each cycle the setting is flipped. 0..1.
+   */
   depth: number
 }
 
@@ -71,19 +88,31 @@ export interface LfoClock {
  * The parameters with every active LFO applied: each swings its slider by
  * depth × half the slider's range around the set value (LFOs on the same
  * slider add up), clamped to the slider's range and rounded on whole-number
- * sliders. Returns `base` itself when no LFO is on.
+ * sliders. A toggle is flipped from its set state while the wave is below
+ * 2·depth − 1, which for saws and triangles is exactly `depth` of each cycle
+ * (square: the second half). Returns `base` itself when no LFO is on.
  */
 export function applyLfos(base: TunnelParams, clock: LfoClock): TunnelParams {
   let out: TunnelParams | null = null
+  const flipped = new Set<ToggleParam>()
   for (const lfo of base.lfos) {
-    const spec = SPECS.get(lfo.target)
-    if (!lfo.on || lfo.depth <= 0 || !spec) continue
+    if (!lfo.on || lfo.depth <= 0) continue
     const phase = lfo.sync ? clock.beats / lfo.beats : clock.seconds * lfo.hz
+    const w = wave(lfo.shape, phase)
     out ??= { ...base }
-    out[lfo.target] += (lfo.depth * (spec.max - spec.min)) / 2 * wave(lfo.shape, phase)
+    if (isToggle(lfo.target)) {
+      if (w < 2 * lfo.depth - 1 && !flipped.has(lfo.target)) {
+        flipped.add(lfo.target)
+        out[lfo.target] = !base[lfo.target]
+      }
+      continue
+    }
+    const spec = SPECS.get(lfo.target)
+    if (spec) out[lfo.target] += (lfo.depth * (spec.max - spec.min)) / 2 * w
   }
   if (!out) return base
   for (const lfo of base.lfos) {
+    if (isToggle(lfo.target)) continue
     const spec = SPECS.get(lfo.target)
     if (!lfo.on || !spec) continue
     const v = Math.min(spec.max, Math.max(spec.min, out[lfo.target]))
