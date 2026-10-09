@@ -77,6 +77,12 @@ export interface TunnelParams {
   dancerEnergy: number
   /** Dancer limb thickness relative to its height. */
   dancerThickness: number
+  /** Light-painting trails from the dancer's hands and feet, 0..1. */
+  dancerTrails: number
+  /** Fading echoes of the dancer a quarter and half beat behind, 0..1. */
+  dancerEchoes: number
+  /** The dancer's reflection on the crater floor, 0..1. */
+  dancerReflection: number
   /** Strength of the glow (bloom). */
   bloom: number
   /** Strength of the motion trail. */
@@ -119,6 +125,9 @@ export const MEASURED_PARAMS: TunnelParams = {
   dancerSize: 0.6,
   dancerEnergy: 1,
   dancerThickness: 0.035,
+  dancerTrails: 0.6,
+  dancerEchoes: 0.5,
+  dancerReflection: 0.5,
   bloom: 0.6,
   trail: 0.1,
 }
@@ -181,5 +190,8 @@ export const PARAM_SPECS: ParamSpec[] = [
   { key: 'dancerSize', label: 'Size', group: 'Dancer', min: 0.2, max: 1.2, step: 0.05 },
   { key: 'dancerEnergy', label: 'Energy', group: 'Dancer', min: 0, max: 2, step: 0.05 },
   { key: 'dancerThickness', label: 'Thickness', group: 'Dancer', min: 0.01, max: 0.08, step: 0.005 },
+  { key: 'dancerTrails', label: 'Light trails', group: 'Dancer', min: 0, max: 1, step: 0.05 },
+  { key: 'dancerEchoes', label: 'Echoes', group: 'Dancer', min: 0, max: 1, step: 0.05 },
+  { key: 'dancerReflection', label: 'Reflection', group: 'Dancer', min: 0, max: 1, step: 0.05 },
   { key: 'trail', label: 'Trail', group: 'Light', min: 0, max: 0.8, step: 0.01 },
 ]

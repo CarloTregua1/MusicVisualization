@@ -165,8 +165,11 @@ describe('dancer', () => {
     })
 
     it('throws a hit accent on strong onsets: hands go up', () => {
+      // Same clip choices for both, so the only difference is the hit.
       const a = new Dancer()
       const b = new Dancer()
+      a.random = () => 0.3
+      b.random = () => 0.3
       run(a, 0, 2)
       run(b, 0, 2)
       for (let f = 0; f < 6; f++) {
@@ -175,6 +178,28 @@ describe('dancer', () => {
       }
       const hands = (d: Dancer) => d.skeleton().handL.y + d.skeleton().handR.y
       expect(hands(b)).toBeGreaterThan(hands(a) + 0.02)
+    })
+  })
+
+  describe('phase 3: history for trails and echoes', () => {
+    it('remembers recent poses: trails run newest first within the time window', () => {
+      const { d } = dance(4, 0.8)
+      const tr = d.jointTrail('handL', 0.4)
+      expect(tr.length / 3).toBeGreaterThan(15)
+      for (let n = 5; n < tr.length; n += 3) expect(tr[n]).toBeGreaterThanOrEqual(tr[n - 3])
+      expect(tr[tr.length - 1]).toBeLessThanOrEqual(0.4)
+      // The newest trail point is where the hand is now.
+      expect(tr[0]).toBeCloseTo(d.skeleton().handL.x, 6)
+      expect(tr[1]).toBeCloseTo(d.skeleton().handL.y, 6)
+    })
+
+    it('gives the pose from a moment ago for echoes, and nothing beyond the history', () => {
+      const { d } = dance(4, 0.8)
+      const now = d.skeleton()
+      const past = d.pastSkeleton(0.25)!
+      expect(past).not.toBeNull()
+      expect(Math.hypot(past.handL.x - now.handL.x, past.handL.y - now.handL.y)).toBeGreaterThan(0.001)
+      expect(d.pastSkeleton(5)).toBeNull()
     })
   })
 })

@@ -69,6 +69,8 @@ const POSITION_SPRING = 18
 export const MAX_POINT_SPEED = 3
 
 const JOINT_NAMES = DANCE_JOINTS as readonly (keyof Skeleton)[]
+/** Poses kept for trails and echoes (~1 s at 60 fps). */
+const HISTORY = 72
 const PELVIS = JOINT_NAMES.indexOf('pelvis')
 const HANDS = [JOINT_NAMES.indexOf('handL'), JOINT_NAMES.indexOf('handR')]
 const FEET = [JOINT_NAMES.indexOf('footL'), JOINT_NAMES.indexOf('footR')]
@@ -132,6 +134,14 @@ export class Dancer {
   private jumpT = -1
   /** Frozen in the dark; jumps back in when the light returns. */
   frozen = false
+  /** Recent poses (ring buffer) for trails and echoes, with the time of each. */
+  private readonly hist = new Float32Array(HISTORY * JOINT_NAMES.length * 2)
+  private readonly histT = new Float64Array(HISTORY)
+  private histHead = -1
+  private histCount = 0
+  private clock = 0
+  /** Current dance-beat length (s), for echoes timed in beats. */
+  beatPeriod = 0.5
   private readonly pos = new Float32Array(JOINT_NAMES.length * 2)
   private readonly vel = new Float32Array(JOINT_NAMES.length * 2)
   private readonly target = new Float32Array(JOINT_NAMES.length * 2)
@@ -165,7 +175,47 @@ export class Dancer {
     }
   }
 
+  /** Records the current pose in the history. */
+  private record() {
+    const J2 = JOINT_NAMES.length * 2
+    this.histHead = (this.histHead + 1) % HISTORY
+    this.hist.set(this.pos, this.histHead * J2)
+    this.histT[this.histHead] = this.clock
+    this.histCount = Math.min(HISTORY, this.histCount + 1)
+  }
+
+  /** Pose `age` seconds ago (nearest recorded frame), or null if older than the history. */
+  pastSkeleton(age: number): Skeleton | null {
+    if (this.histCount === 0) return null
+    const J2 = JOINT_NAMES.length * 2
+    const want = this.clock - age
+    for (let n = 0; n < this.histCount; n++) {
+      const i = (this.histHead - n + HISTORY) % HISTORY
+      if (this.histT[i] <= want) {
+        const sk = {} as Skeleton
+        JOINT_NAMES.forEach((name, j) => (sk[name] = { x: this.hist[i * J2 + 2 * j], y: this.hist[i * J2 + 2 * j + 1] }))
+        return sk
+      }
+    }
+    return null
+  }
+
+  /** Path of one joint over the last `seconds`, newest first, as [x, y, age] triples. */
+  jointTrail(joint: keyof Skeleton, seconds: number): number[] {
+    const J2 = JOINT_NAMES.length * 2
+    const j = JOINT_NAMES.indexOf(joint)
+    const out: number[] = []
+    for (let n = 0; n < this.histCount; n++) {
+      const i = (this.histHead - n + HISTORY) % HISTORY
+      const age = this.clock - this.histT[i]
+      if (age > seconds) break
+      out.push(this.hist[i * J2 + 2 * j], this.hist[i * J2 + 2 * j + 1], age)
+    }
+    return out
+  }
+
   update(dt: number, input: DancerInput, style: DancerStyle) {
+    this.clock += dt
     // Half time for fast music: one dance beat spans two musical beats.
     const half = beat0HalfTime(input.beat.period)
     const beat = half
@@ -177,10 +227,12 @@ export class Dancer {
     this.accent = Math.max(input.onset, this.accent * Math.exp(-dt * 8))
     this.flash = Math.max(pulse(beat.phase) * Math.min(1, this.energy * 1.5), this.flash * Math.exp(-dt * 10))
 
+    this.beatPeriod = beat.period
     // Blackouts and silence: freeze mid-pose; jump back in when the light returns.
     const light = input.light ?? 1
     if (light < FREEZE_LIGHT) {
       this.frozen = true
+      this.record()
       return
     }
     if (this.frozen && light > 0.3) {
@@ -262,6 +314,7 @@ export class Dancer {
 
     // Colour follows the sound's brightness, smoothed so it glides.
     this.colourPos += (input.brightness - this.colourPos) * (1 - Math.exp(-dt / 0.4))
+    this.record()
   }
 
   /** For drops: one of the three most energetic clips (not the current one). */
@@ -386,6 +439,47 @@ export interface Stage {
  * dark edge, a body and a lit core, with a rim light on its outline. Brightness is the scene
  * light, so the figure goes dark with the scene; it flashes on beats.
  */
+export interface DancerEffects {
+  /** Light-painting trails from the hands and feet, 0..1. */
+  trails: number
+  /** Fading copies of the body a quarter and half beat behind, 0..1. */
+  echoes: number
+  /** Mirror image on the crater floor, 0..1. */
+  reflection: number
+}
+
+/** Body as filled shapes at a given scale of every radius (1 = silhouette). */
+function bodyPath(sk: Skeleton, X: (j: Joint) => number, Y: (j: Joint) => number, H: number, k: number, scale: number): Path2D {
+  const p = new Path2D()
+  for (const [a, b, ra, rb] of LIMBS) capsule(p, X(sk[a]), Y(sk[a]), ra * k * H * scale, X(sk[b]), Y(sk[b]), rb * k * H * scale)
+  capsule(p, X(sk.neck), Y(sk.neck), NECK_RADIUS * k * H * scale, X(sk.head), Y(sk.head), NECK_RADIUS * k * H * scale)
+  torso(p, sk, X, Y, scale)
+  // Hands: small mitts carried on past the wrist along the forearm.
+  for (const [e, h] of [['elbowL', 'handL'], ['elbowR', 'handR']] as const) {
+    const dx = sk[h].x - sk[e].x
+    const dy = sk[h].y - sk[e].y
+    const len = Math.hypot(dx, dy) || 1
+    const tip = { x: sk[h].x + (dx / len) * 0.045, y: sk[h].y + (dy / len) * 0.045 }
+    capsule(p, X(sk[h]), Y(sk[h]), 0.02 * k * H * scale, X(tip), Y(tip), 0.016 * k * H * scale)
+  }
+  // Feet: short wedges pointing slightly outward, resting on the ankle.
+  for (const [f, dir] of [['footL', -1], ['footR', 1]] as const) {
+    const toe = { x: sk[f].x + dir * 0.05, y: sk[f].y - 0.012 }
+    capsule(p, X(sk[f]), Y(sk[f]), 0.022 * k * H * scale, X(toe), Y(toe), 0.014 * k * H * scale)
+  }
+  const hr = HEAD_RADIUS * H * Math.max(0.55, scale)
+  p.moveTo(X(sk.head) + hr, Y(sk.head))
+  p.arc(X(sk.head), Y(sk.head), hr, 0, Math.PI * 2)
+  return p
+}
+
+/**
+ * Draws the dancer: light-painting trails, echoes and a floor reflection
+ * behind it, then the body itself — tapered limbs, a waisted torso, neck,
+ * head, mitt hands and wedge feet, shaded as a dark edge, a body and a lit
+ * core, with a rim light on its silhouette. Brightness is the scene light,
+ * so everything goes dark with the scene; it flashes on beats.
+ */
 export function drawDancer(
   ctx: CanvasRenderingContext2D,
   dancer: Dancer,
@@ -393,6 +487,7 @@ export function drawDancer(
   temperature: number,
   variety: number,
   thickness: number,
+  fx: DancerEffects = { trails: 0, echoes: 0, reflection: 0 },
 ) {
   if (stage.light < 0.01) return
   const sk = dancer.skeleton()
@@ -400,51 +495,80 @@ export function drawDancer(
   const X = (j: Joint) => stage.x + j.x * H
   const Y = (j: Joint) => stage.y - j.y * H
   const light = stage.light * (1 + 0.6 * dancer.flash)
+  const k = thickness / DEFAULT_THICKNESS
+  const colour = (l: number) => dancer.colour(temperature, l, variety)
 
   const c = Math.cos(stage.roll)
   const s = Math.sin(stage.roll)
   ctx.save()
   ctx.setTransform(c, s, -s, c, stage.rollX - stage.rollX * c + stage.rollY * s, stage.rollY - stage.rollX * s - stage.rollY * c)
-  const k = thickness / DEFAULT_THICKNESS
-  // Body as filled shapes, built at a given scale of every radius, so the
-  // same silhouette can be drawn as a dark edge, a body and a lit core.
-  const body = (scale: number) => {
-    const p = new Path2D()
-    for (const [a, b, ra, rb] of LIMBS) capsule(p, X(sk[a]), Y(sk[a]), ra * k * H * scale, X(sk[b]), Y(sk[b]), rb * k * H * scale)
-    capsule(p, X(sk.neck), Y(sk.neck), NECK_RADIUS * k * H * scale, X(sk.head), Y(sk.head), NECK_RADIUS * k * H * scale)
-    torso(p, sk, X, Y, scale)
-    // Hands: small mitts carried on past the wrist along the forearm.
-    for (const [e, h] of [['elbowL', 'handL'], ['elbowR', 'handR']] as const) {
-      const dx = sk[h].x - sk[e].x
-      const dy = sk[h].y - sk[e].y
-      const len = Math.hypot(dx, dy) || 1
-      const tip = { x: sk[h].x + (dx / len) * 0.045, y: sk[h].y + (dy / len) * 0.045 }
-      capsule(p, X(sk[h]), Y(sk[h]), 0.02 * k * H * scale, X(tip), Y(tip), 0.016 * k * H * scale)
-    }
-    // Feet: short wedges pointing slightly outward, resting on the ankle.
-    for (const [f, dir] of [['footL', -1], ['footR', 1]] as const) {
-      const toe = { x: sk[f].x + dir * 0.05, y: sk[f].y - 0.012 }
-      capsule(p, X(sk[f]), Y(sk[f]), 0.022 * k * H * scale, X(toe), Y(toe), 0.014 * k * H * scale)
-    }
-    p.moveTo(X(sk.head) + HEAD_RADIUS * H * Math.max(0.55, scale), Y(sk.head))
-    p.arc(X(sk.head), Y(sk.head), HEAD_RADIUS * H * Math.max(0.55, scale), 0, Math.PI * 2)
-    return p
+
+  // Reflection on the crater floor: the body mirrored below the feet,
+  // squashed by the viewing angle, faint.
+  if (fx.reflection > 0.01) {
+    ctx.save()
+    ctx.translate(0, stage.y)
+    ctx.scale(1, -0.42)
+    ctx.translate(0, -stage.y)
+    ctx.globalCompositeOperation = 'lighter'
+    ctx.globalAlpha = Math.min(1, 0.22 * fx.reflection * stage.light)
+    ctx.fillStyle = colour(light * 0.8)
+    ctx.fill(bodyPath(sk, X, Y, H, k, 1), 'nonzero')
+    ctx.restore()
   }
+
+  // Echoes: fading copies a quarter and a half beat behind.
+  if (fx.echoes > 0.01) {
+    ctx.globalCompositeOperation = 'lighter'
+    for (const [beats, alpha] of [[0.5, 0.22], [0.25, 0.34]] as const) {
+      const past = dancer.pastSkeleton(beats * dancer.beatPeriod)
+      if (!past) continue
+      ctx.globalAlpha = Math.min(1, alpha * fx.echoes * stage.light)
+      ctx.fillStyle = colour(light * 0.9)
+      ctx.fill(bodyPath(past, X, Y, H, k, 0.85), 'nonzero')
+    }
+    ctx.globalCompositeOperation = 'source-over'
+    ctx.globalAlpha = 1
+  }
+
+  // Light-painting trails from the hands and feet: tapering, fading streaks.
+  if (fx.trails > 0.01) {
+    const seconds = 0.3 + 0.6 * fx.trails
+    ctx.globalCompositeOperation = 'lighter'
+    ctx.lineCap = 'round'
+    for (const joint of ['handL', 'handR', 'footL', 'footR'] as const) {
+      const tr = dancer.jointTrail(joint, seconds)
+      for (let n = 3; n < tr.length; n += 3) {
+        const fade = 1 - tr[n + 2] / seconds
+        if (fade <= 0) break
+        ctx.globalAlpha = Math.min(1, 1.1 * fade * fx.trails * stage.light)
+        ctx.strokeStyle = colour(light * (0.9 + 0.4 * fade))
+        ctx.lineWidth = Math.max(1, 0.04 * k * H * (0.25 + 0.75 * fade))
+        ctx.beginPath()
+        ctx.moveTo(stage.x + tr[n - 3] * H, stage.y - tr[n - 2] * H)
+        ctx.lineTo(stage.x + tr[n] * H, stage.y - tr[n + 1] * H)
+        ctx.stroke()
+      }
+    }
+    ctx.globalCompositeOperation = 'source-over'
+    ctx.globalAlpha = 1
+  }
+
   // Rim light: the white rim surrounds the dancer, so its silhouette catches
   // light. Drawn as a slightly larger body behind it, so only the outer edge
   // glows (no lines where limbs overlap).
   ctx.globalCompositeOperation = 'lighter'
   ctx.globalAlpha = Math.min(1, 0.6 * stage.light)
-  ctx.fillStyle = dancer.colour(temperature, light * 1.2, variety)
-  ctx.fill(body(1.14), 'nonzero')
+  ctx.fillStyle = colour(light * 1.2)
+  ctx.fill(bodyPath(sk, X, Y, H, k, 1.14), 'nonzero')
   ctx.globalCompositeOperation = 'source-over'
   ctx.globalAlpha = 1
   // Dark edge, body, then a lit core: rounded like the tubes.
-  ctx.fillStyle = dancer.colour(temperature, light * 0.28, variety)
-  ctx.fill(body(1), 'nonzero')
-  ctx.fillStyle = dancer.colour(temperature, light * 0.7, variety)
-  ctx.fill(body(0.72), 'nonzero')
-  ctx.fillStyle = dancer.colour(temperature, light * 1.05, variety)
-  ctx.fill(body(0.38), 'nonzero')
+  ctx.fillStyle = colour(light * 0.28)
+  ctx.fill(bodyPath(sk, X, Y, H, k, 1), 'nonzero')
+  ctx.fillStyle = colour(light * 0.7)
+  ctx.fill(bodyPath(sk, X, Y, H, k, 0.72), 'nonzero')
+  ctx.fillStyle = colour(light * 1.05)
+  ctx.fill(bodyPath(sk, X, Y, H, k, 0.38), 'nonzero')
   ctx.restore()
 }

@@ -220,6 +220,7 @@ export function VisualizerView({ player, audio, tempo, beats, structure, tempoPr
           temp,
           pr.colourVariety,
           pr.dancerThickness,
+          { trails: pr.dancerTrails, echoes: pr.dancerEchoes, reflection: pr.dancerReflection },
         )
       }
 
