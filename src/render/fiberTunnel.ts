@@ -12,6 +12,8 @@ const Z_NEAR = 0.35
 const COHERENCE = 0.1
 /** Camera height above the tunnel axis: near fibres swing down into a floor. */
 const CAMERA_HEIGHT = 0.5
+/** Minimum on-screen gap between a fibre and the newer one inside it, as a fraction of their natural spacing. */
+const MIN_GAP = 0.45
 /** Bloom is computed at this fraction of the canvas size (downscale = cheap blur). */
 const BLOOM_SCALE = 0.25
 
@@ -54,9 +56,9 @@ const smooth = (e0: number, e1: number, x: number) => {
  * the fibre's position around the spectrum tints it, so frequencies still
  * read as different hues. Always fully saturated neon.
  */
-function fiberColor(temperature: number, age: number, pos: number, boost: number): string {
-  const hue = 320 - 135 * age + (temperature - 0.5) * 110 + (pos - 0.5) * 36
-  const light = Math.min(92, 56 + 30 * Math.pow(1 - age, 3) + 12 * boost)
+function fiberColor(temperature: number, age: number, pos: number, energy: number, tint: number): string {
+  const hue = 320 - 135 * age + (temperature - 0.5) * 110 + (pos - 0.5) * 36 + tint
+  const light = Math.min(92, 52 + 28 * Math.pow(1 - age, 3) + 16 * energy)
   return `hsl(${(((hue % 360) + 360) % 360).toFixed(0)}, 100%, ${light.toFixed(0)}%)`
 }
 
@@ -83,8 +85,12 @@ export class FiberTunnel {
   private readonly pos: Float32Array
   private readonly cos: Float32Array
   private readonly sin: Float32Array
-  private readonly xs = new Float32Array(POINTS)
-  private readonly ys = new Float32Array(POINTS)
+  // This frame's fibre geometry (by live index) and per-point loudness.
+  private readonly xs = new Float32Array(MAX_FIBERS * POINTS)
+  private readonly ys = new Float32Array(MAX_FIBERS * POINTS)
+  private readonly vs = new Float32Array(MAX_FIBERS * POINTS)
+  /** Screen radius of the newer neighbour at each angle, for the no-crossing rule. */
+  private readonly inner = new Float32Array(POINTS)
   private readonly layer: HTMLCanvasElement
   private readonly trail: HTMLCanvasElement
   private readonly bloom: HTMLCanvasElement
@@ -238,8 +244,8 @@ export class FiberTunnel {
     // A soft trail: last frame, pushed outward a touch and faded.
     lc.save()
     lc.translate(cx, cy)
-    lc.scale(1.008, 1.008)
-    lc.globalAlpha = 0.35
+    lc.scale(1.006, 1.006)
+    lc.globalAlpha = 0.12
     lc.drawImage(this.trail, -cx, -cy, W, H)
     lc.restore()
 
@@ -255,54 +261,74 @@ export class FiberTunnel {
     lc.lineCap = 'round'
     const last = this.fibers[0].bands.length - 1
     const logSpan = Math.log(Z_FAR / Z_NEAR)
-    const { xs, ys } = this
-    for (let i = 0; i < this.count; i++) {
+    const { xs, ys, vs, inner } = this
+
+    // Geometry, newest (innermost) first. Each fibre is kept just outside the
+    // newer one at every angle, so the stack never crosses: a tower on a fresh
+    // fibre lifts every older fibre over it into a wall of nested contours.
+    let innerS = 0
+    for (let i = this.count - 1; i >= 0; i--) {
       const f = this.fiber(i)
       const z = f.z
-      // 0 = just born at the hollow, 1 = reaching the camera.
-      const age = Math.log(Z_FAR / z) / logSpan
-      const alpha =
-        smooth(0, 0.03, age) * (1 - smooth(0.82, 1, age)) * (0.45 + 0.55 * f.level) * (1 + 0.6 * this.flash)
-      if (alpha < 0.01) continue
-
       const amp = (0.4 + 0.6 * f.level) * (1 + 0.5 * f.onset)
-      // Fine thread detail: incommensurate ripples whose phases drift slowly
-      // from fibre to fibre, so neighbours wiggle together in bundles.
-      const fine = (0.008 + 0.03 * f.treble) * amp
+      // A whisper of thread detail, shared by neighbours so it never looks noisy.
+      const fine = (0.003 + 0.01 * f.treble) * amp
       const ph = f.phase
       const s = focal / z
       // Rotate the fibre's spectrum layout by its birth turn (in whole points).
       const shift = Math.round((f.turn / (2 * Math.PI)) * POINTS)
       const ox = cx - camX * s
       const oy = cy + aimY + camY * s
-
+      const gap = i === this.count - 1 ? 0 : Math.max(1.1 * px, MIN_GAP * (s - innerS))
+      const o = i * POINTS
       for (let p = 0; p < POINTS; p++) {
         const q = this.pos[(p + shift + POINTS * 4) % POINTS] * last
         const k0 = q | 0
         const t = q - k0
         const v = f.bands[k0] * (1 - t) + f.bands[Math.min(last, k0 + 1)] * t
         const th = (p / POINTS) * 2 * Math.PI
-        const ripple =
-          0.5 * Math.sin(9 * th + ph * 3.1) + 0.3 * Math.sin(17 * th - ph * 4.7 + 1.3) + 0.2 * Math.sin(31 * th + ph * 6.3)
+        const ripple = 0.6 * Math.sin(9 * th + ph * 3.1) + 0.4 * Math.sin(17 * th - ph * 4.7 + 1.3)
         // Loud bands rise outward into tall, peaked towers (v³ keeps all but the
         // loudest bands flat, so towers stand out from a calm floor).
-        const r = 1 + 2.6 * v * v * v * amp - 0.08 * v + fine * ripple + 0.004 * f.jitter
-        xs[p] = ox + r * this.cos[p] * s
-        ys[p] = oy + r * this.sin[p] * s
+        const r = 1 + 2.6 * v * v * v * amp - 0.08 * v + fine * ripple
+        let rho = r * s
+        if (i !== this.count - 1 && rho < inner[p] + gap) rho = inner[p] + gap
+        inner[p] = rho
+        xs[o + p] = ox + rho * this.cos[p]
+        ys[o + p] = oy + rho * this.sin[p]
+        vs[o + p] = v
       }
+      innerS = s
+    }
 
+    // Draw, oldest first.
+    for (let i = 0; i < this.count; i++) {
+      const f = this.fiber(i)
+      const z = f.z
+      // 0 = just born at the hollow, 1 = reaching the camera.
+      const age = Math.log(Z_FAR / z) / logSpan
+      const alpha = smooth(0, 0.03, age) * (1 - smooth(0.82, 1, age)) * (0.75 + 0.25 * f.level) * (1 + 0.4 * this.flash)
+      if (alpha < 0.01) continue
+      const shift = Math.round((f.turn / (2 * Math.PI)) * POINTS)
+      const o = i * POINTS
       lc.globalAlpha = Math.min(1, alpha)
-      lc.lineWidth = Math.max(0.6, (0.9 * px) / Math.pow(z, 0.7)) * (1 + 0.6 * f.onset)
-      const boost = f.onset + 0.5 * this.flash
+      // Crisp lines; fibres born on a hit are thicker accents.
+      lc.lineWidth = Math.max(0.8, (1.0 * px) / Math.pow(z, 0.7)) * (1 + 0.8 * f.onset)
+      // Each fibre gets its own slight hue, so neighbours stay distinguishable.
+      const tint = f.jitter * 16
       for (let sg = 0; sg < SEGMENTS; sg++) {
         // Integer bounds: POINTS needn't be a multiple of SEGMENTS.
         const a = Math.round((sg * POINTS) / SEGMENTS)
         const b = Math.round(((sg + 1) * POINTS) / SEGMENTS)
-        lc.strokeStyle = fiberColor(f.temperature, age, this.pos[(((a + b) >> 1) + shift + POINTS * 4) % POINTS], boost)
+        // Brightness follows this fibre's own loudness along the segment.
+        let e = 0
+        for (let p = a; p < b; p++) e += vs[o + (p % POINTS)]
+        e = e / (b - a) + f.onset * 0.6 + this.flash * 0.3
+        lc.strokeStyle = fiberColor(f.temperature, age, this.pos[(((a + b) >> 1) + shift + POINTS * 4) % POINTS], e, tint)
         lc.beginPath()
-        lc.moveTo(xs[a], ys[a])
+        lc.moveTo(xs[o + a], ys[o + a])
         for (let p = a + 1; p <= b; p++) {
-          const idx = p % POINTS
+          const idx = o + (p % POINTS)
           lc.lineTo(xs[idx], ys[idx])
         }
         lc.stroke()
@@ -326,7 +352,7 @@ export class FiberTunnel {
     bc.drawImage(this.layer, 0, 0, this.bloom.width, this.bloom.height)
     ctx.imageSmoothingEnabled = true
     ctx.globalCompositeOperation = 'lighter'
-    ctx.globalAlpha = 0.5 + 0.35 * this.flash
+    ctx.globalAlpha = 0.28 + 0.25 * this.flash
     ctx.drawImage(this.bloom, 0, 0, W, H)
     ctx.globalAlpha = 1
     ctx.globalCompositeOperation = 'source-over'
