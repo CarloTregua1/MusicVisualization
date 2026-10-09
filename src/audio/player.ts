@@ -1,56 +1,63 @@
+import { encodeWav } from './wav'
+
 type Listener = () => void
 
+/** Sample rate used for decoding; analysis works on this rate whatever the file's. */
+const DECODE_RATE = 44100
+
 /**
- * Play/pause/seek over an AudioBuffer. Web Audio sources are one-shot, so
- * each play() creates a new AudioBufferSourceNode starting at `offset`.
- * An optional alternate buffer (the resynthesized "math" version) can be
- * swapped in at the same position for A/B listening.
+ * Play/pause/seek for the loaded track. Playback goes through a plain
+ * HTMLAudioElement — the same path the browser uses for any web video — so
+ * it is not subject to Web Audio's autoplay and output-device quirks
+ * (Safari especially). Web Audio is used only offline, to decode the file
+ * for analysis. An alternate track (the resynthesized "math" version) can
+ * be swapped in at the same position for A/B listening.
  */
 export class Player {
-  private context: AudioContext | null = null
-  private original: AudioBuffer | null = null
-  private alternate: AudioBuffer | null = null
+  private element: HTMLAudioElement | null = null
+  private decoder: OfflineAudioContext | null = null
+  private originalUrl: string | null = null
+  private alternateUrl: string | null = null
   private useAlternate = false
-  private source: AudioBufferSourceNode | null = null
-  private startTime = 0
-  private offset = 0
+  private trackDuration = 0
   private listeners = new Set<Listener>()
-  /** True between a play() call and the source actually starting. */
-  private starting = false
-  playing = false
+  // Last media time seen and when, to interpolate between coarse clock updates.
+  private lastMedia = -1
+  private lastPerf = 0
   /** Why the last play() failed, for the UI; null when fine. */
   error: string | null = null
 
-  /**
-   * The AudioContext, created on first use. That first use is a user gesture
-   * (loading a file or pressing play), which Safari needs to allow sound.
-   */
-  get ctx(): AudioContext {
-    if (!this.context) {
-      this.context = new AudioContext()
-      // Safari can suspend or "interrupt" the context; reflect that in the UI.
-      this.context.onstatechange = () => this.emit()
+  /** Offline context for decoding audio and creating buffers; never makes sound. */
+  get ctx(): BaseAudioContext {
+    return (this.decoder ??= new OfflineAudioContext(1, DECODE_RATE, DECODE_RATE))
+  }
+
+  private get audio(): HTMLAudioElement {
+    if (!this.element) {
+      const el = document.createElement('audio')
+      el.preload = 'auto'
+      // Changing src pauses the element without a 'pause' event; 'emptied' covers it.
+      for (const ev of ['play', 'playing', 'pause', 'ended', 'emptied', 'seeked']) el.addEventListener(ev, () => this.sync())
+      el.addEventListener('error', () => {
+        if (el.getAttribute('src')) this.fail("The browser couldn't play this audio.")
+      })
+      this.element = el
     }
-    return this.context
+    return this.element
   }
 
-  /** Audio engine state for the UI: 'none' before the first gesture. */
-  get audioState(): string {
-    return this.context?.state ?? 'none'
-  }
-
-  /** Call from any user gesture: wakes a context the browser suspended while playing. */
-  unlock() {
-    const ctx = this.context
-    if (ctx && ctx.state !== 'running' && ctx.state !== 'closed') void ctx.resume().catch(() => {})
+  /** Read from the element itself, so it can never disagree with what is audible. */
+  get playing(): boolean {
+    const el = this.element
+    return !!el && !el.paused && !el.ended
   }
 
   get duration(): number {
-    return this.original?.duration ?? 0
+    return this.trackDuration
   }
 
   get abState(): 'original' | 'math' {
-    return this.useAlternate && this.alternate ? 'math' : 'original'
+    return this.useAlternate && this.alternateUrl ? 'math' : 'original'
   }
 
   subscribe(fn: Listener): () => void {
@@ -62,63 +69,8 @@ export class Player {
     for (const fn of this.listeners) fn()
   }
 
-  load(buffer: AudioBuffer) {
-    this.stopSource()
-    this.original = buffer
-    this.alternate = null
-    this.useAlternate = false
-    this.offset = 0
-    this.playing = false
-    this.emit()
-  }
-
-  /** Playback position in seconds, used for transport state. */
-  position(): number {
-    if (!this.playing) return this.offset
-    return Math.min(this.offset + this.ctx.currentTime - this.startTime, this.duration)
-  }
-
-  /** Position of what is audible right now: corrects for output latency so visuals line up. */
-  currentTime(): number {
-    if (!this.playing) return this.offset
-    const latency = this.ctx.outputLatency || this.ctx.baseLatency || 0
-    return Math.max(this.offset, this.position() - latency)
-  }
-
-  async play() {
-    if (this.playing || this.starting) return
-    if (!this.original) {
-      this.fail('No audio is loaded. Open a file first.')
-      return
-    }
-    if (this.offset >= this.duration) this.offset = 0
-    this.starting = true
-    try {
-      await this.ctx.resume()
-    } catch {
-      /* state is checked below */
-    } finally {
-      this.starting = false
-    }
-    if (this.ctx.state !== 'running') {
-      this.fail('The browser blocked audio. Click anywhere on the page, then press play again.')
-      return
-    }
-    this.error = null
-    const src = this.ctx.createBufferSource()
-    src.buffer = this.useAlternate && this.alternate ? this.alternate : this.original
-    src.connect(this.ctx.destination)
-    src.onended = () => {
-      if (this.source !== src) return
-      this.source = null
-      this.offset = this.duration
-      this.playing = false
-      this.emit()
-    }
-    src.start(0, this.offset)
-    this.source = src
-    this.startTime = this.ctx.currentTime
-    this.playing = true
+  private sync() {
+    this.lastMedia = -1
     this.emit()
   }
 
@@ -127,12 +79,66 @@ export class Player {
     this.emit()
   }
 
+  /** Loads a track: `file` is played, `buffer` (its decoded audio) gives the duration. */
+  load(buffer: AudioBuffer, file: Blob) {
+    const el = this.audio
+    el.pause()
+    if (this.originalUrl) URL.revokeObjectURL(this.originalUrl)
+    if (this.alternateUrl) URL.revokeObjectURL(this.alternateUrl)
+    this.originalUrl = URL.createObjectURL(file)
+    this.alternateUrl = null
+    this.useAlternate = false
+    this.trackDuration = buffer.duration
+    this.error = null
+    el.src = this.originalUrl
+    el.currentTime = 0
+    this.sync()
+  }
+
+  /** Playback position in seconds. */
+  position(): number {
+    if (!this.element) return 0
+    const t = this.element.currentTime
+    if (!this.playing) return t
+    // Some browsers update currentTime coarsely; extrapolate between updates.
+    const now = performance.now()
+    if (t !== this.lastMedia) {
+      this.lastMedia = t
+      this.lastPerf = now
+      return t
+    }
+    return Math.min(this.trackDuration, t + (now - this.lastPerf) / 1000)
+  }
+
+  /** Position of what is audible right now (for the visuals). */
+  currentTime(): number {
+    return this.position()
+  }
+
+  async play() {
+    if (this.playing) return
+    if (!this.originalUrl) {
+      this.fail('No audio is loaded. Open a file first.')
+      return
+    }
+    const el = this.audio
+    if (el.ended || el.currentTime >= this.trackDuration) el.currentTime = 0
+    try {
+      await el.play()
+      this.error = null
+      this.emit()
+    } catch (e) {
+      const name = (e as DOMException)?.name
+      this.fail(
+        name === 'NotAllowedError'
+          ? 'The browser blocked audio. Click anywhere on the page, then press play again.'
+          : "The browser couldn't play this audio.",
+      )
+    }
+  }
+
   pause() {
-    if (!this.playing) return
-    this.offset = this.position()
-    this.stopSource()
-    this.playing = false
-    this.emit()
+    this.element?.pause()
   }
 
   toggle() {
@@ -141,41 +147,44 @@ export class Player {
   }
 
   seek(seconds: number) {
-    const wasPlaying = this.playing
-    if (wasPlaying) {
-      this.stopSource()
-      this.playing = false
-    }
-    this.offset = Math.max(0, Math.min(seconds, this.duration))
-    if (wasPlaying) void this.play()
-    else this.emit()
+    if (!this.element) return
+    this.element.currentTime = Math.max(0, Math.min(seconds, this.trackDuration))
+    this.lastMedia = -1
+    this.emit()
   }
 
+  /** Sets (or clears) the alternate "math" track, from its rendered samples. */
   setAlternate(buffer: AudioBuffer | null) {
-    this.alternate = buffer
+    if (this.alternateUrl) URL.revokeObjectURL(this.alternateUrl)
+    this.alternateUrl = buffer ? URL.createObjectURL(encodeWav(buffer.getChannelData(0), buffer.sampleRate)) : null
     if (!buffer) this.setAB('original')
     else this.emit()
   }
 
   setAB(which: 'original' | 'math') {
-    const useAlt = which === 'math' && this.alternate !== null
-    if (useAlt === this.useAlternate) return
+    const useAlt = which === 'math' && this.alternateUrl !== null
+    if (useAlt === this.useAlternate || !this.originalUrl) return
     this.useAlternate = useAlt
-    if (this.playing) this.seek(this.position())
-    else this.emit()
+    const el = this.audio
+    const t = el.currentTime
+    const wasPlaying = this.playing
+    el.src = (useAlt ? this.alternateUrl : this.originalUrl) as string
+    // A position set before the new source's metadata loads can be dropped
+    // (Safari resets to 0), so restore it once the track is ready.
+    el.addEventListener(
+      'loadedmetadata',
+      () => {
+        el.currentTime = t
+        if (wasPlaying) void this.play()
+        else this.emit()
+      },
+      { once: true },
+    )
   }
 
-  private stopSource() {
-    const src = this.source
-    this.source = null
-    if (src) {
-      src.onended = null
-      try {
-        src.stop()
-      } catch {
-        /* already stopped */
-      }
-      src.disconnect()
-    }
+  /** Engine state for diagnostics. */
+  get audioState(): string {
+    if (!this.element) return 'none'
+    return this.playing ? 'playing' : 'paused'
   }
 }

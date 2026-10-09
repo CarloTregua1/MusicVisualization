@@ -75,7 +75,7 @@ export default function App() {
         const loaded = await loadAudioFile(file, player.ctx)
         resynthJob.current++
         setResynth({ status: 'idle' })
-        player.load(loaded.buffer)
+        player.load(loaded.buffer, file)
         setTempo(null)
         setTempoProgress(0)
         setAudio(loaded)
@@ -89,17 +89,6 @@ export default function App() {
   )
 
   const patchSettings = useCallback((patch: Partial<Settings>) => setSettings((s) => ({ ...s, ...patch })), [])
-
-  // Any interaction wakes an audio context the browser suspended (Safari does this).
-  useEffect(() => {
-    const unlock = () => player.unlock()
-    window.addEventListener('pointerdown', unlock)
-    window.addEventListener('keydown', unlock)
-    return () => {
-      window.removeEventListener('pointerdown', unlock)
-      window.removeEventListener('keydown', unlock)
-    }
-  }, [player])
 
   // Keyboard: space toggles playback, ←/→ seek by 5 s.
   useEffect(() => {

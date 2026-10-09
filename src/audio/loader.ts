@@ -6,7 +6,7 @@ export interface LoadedAudio {
   sampleRate: number
 }
 
-export async function loadAudioFile(file: File, ctx: AudioContext): Promise<LoadedAudio> {
+export async function loadAudioFile(file: File, ctx: BaseAudioContext): Promise<LoadedAudio> {
   const buffer = await ctx.decodeAudioData(await file.arrayBuffer())
   return { name: file.name, buffer, mono: mixToMono(buffer), sampleRate: buffer.sampleRate }
 }
