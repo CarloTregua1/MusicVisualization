@@ -98,8 +98,8 @@ export function VisualizerView({ player, audio, tempo, tempoProgress, playing, t
       input.temperature = temp
       input.level = level
 
-      // A slow, calm drift; faster music drifts a little faster.
-      const lifetime = Math.min(7, Math.max(4, 5.5 * (120 / shownBpm)))
+      // Slow spreading keeps the rings tight; faster music spreads a little faster.
+      const lifetime = Math.min(14, Math.max(8, 11 * (120 / shownBpm)))
       tunnel.update(dt, input, sounding, onset, lifetime)
       backdrop.draw(ctx, dt, { temperature: temp, level: player.playing ? level : 0, beat })
       tunnel.render(ctx)

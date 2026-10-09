@@ -9,7 +9,7 @@ const SEGMENTS = 8
 const TUBE_RATE = 11
 /** Ring radii on the ground: tubes develop at the crater rim and grow until R_MAX. */
 const R_RIM = 1
-const R_MAX = 8
+const R_MAX = 6
 /**
  * Camera: this far from the crater's centre (horizontally) and this high
  * above the land, looking down at the crater at 45°. Chosen side by side
@@ -24,7 +24,7 @@ const FOCAL = 2.1
 /** Time constant (s) of the spectrum smoothing, so consecutive tubes stack coherently. */
 const COHERENCE = 0.06
 /** World radius of a tube's cross-section at the rim; tubes thicken as they grow. */
-const TUBE_RADIUS = 0.011
+const TUBE_RADIUS = 0.013
 /** Wave/wall height unit at the rim, in crater radii; heights grow with the ring. */
 const HEIGHT_UNIT = 0.55
 /** Height of the tallest walls, in height units. */
@@ -43,6 +43,15 @@ const WAVE_HEIGHT = 0.5
 const CREST_SHARPNESS = 3
 /** Irregular lumps in each ring's outline (and so in the crater's rim), relative to its radius. */
 const LUMP = 0.1
+/** How much bass makes a ring breathe wider, relative to its radius. */
+const BREATH = 0.06
+/** How much the bass/treble balance tilts a ring (one side raised), in height units. */
+const TILT = 0.5
+/** Fine jagged spikes along the tube, from treble × noisiness, in height units. */
+const JAG = 0.35
+/** Wave count range around a ring: dull sound gives few broad waves, bright sound many fine ones. */
+const WAVES_MIN = 3
+const WAVES_MAX = 16
 /** After its development, a tube fades from white to its colour over this long (s). */
 const COOL_TIME = 0.12
 /** The light: the white rim, modelled as a point this high above the crater's centre. */
@@ -75,6 +84,15 @@ interface Tube {
   /** Birth time: sets the phases of its waves and lumps, which drift slowly from
    * tube to tube so neighbours stay coherent while the pattern never repeats. */
   born: number
+  // Sound character during development, each driving its own change of shape.
+  /** Low/mid/high band energy, 0..1. */
+  bass: number
+  mid: number
+  treble: number
+  /** Spectral centroid 0..1 (where the energy sits: low = dull, high = bright). */
+  brightness: number
+  /** Spectral flatness 0..1 (tonal → noisy). */
+  noise: number
 }
 
 export interface FiberInput {
@@ -175,6 +193,11 @@ export class FiberTunnel {
       jitter: 0,
       turn: 0,
       born: 0,
+      bass: 0,
+      mid: 0,
+      treble: 0,
+      brightness: 0,
+      noise: 0,
     }))
     this.smoothBands = new Float32Array(bandCount)
     this.rawPeaks = new Float32Array(bandCount)
@@ -255,6 +278,7 @@ export class FiberTunnel {
     t.jitter = ((this.head * 0.618034) % 1) - 0.5
     t.turn = 0.45 * Math.sin(this.time * 0.07) + 0.15 * Math.sin(this.time * 0.19 + 1)
     t.born = this.time
+    t.bass = t.mid = t.treble = t.brightness = t.noise = 0
   }
 
   private develop(t: Tube, input: FiberInput, onset: number) {
@@ -268,6 +292,30 @@ export class FiberTunnel {
     t.level = Math.max(t.level, input.level)
     t.onset = Math.max(t.onset, onset)
     t.temperature = input.temperature
+    // Sound character: band energies (peak-held over the development window),
+    // brightness and noisiness (latest), each shaping the tube differently.
+    const third = Math.floor(n / 3)
+    let lo = 0
+    let mi = 0
+    let hi = 0
+    let sum = 0
+    let weighted = 0
+    let logSum = 0
+    for (let i = 0; i < n; i++) {
+      const v = t.bands[i]
+      if (i < third) lo += v
+      else if (i < 2 * third) mi += v
+      else hi += v
+      sum += v
+      weighted += v * i
+      logSum += Math.log(v + 1e-3)
+    }
+    t.bass = Math.max(t.bass, lo / third)
+    t.mid = Math.max(t.mid, mi / third)
+    t.treble = Math.max(t.treble, hi / (n - 2 * third))
+    const mean = sum / n
+    t.brightness = sum > 1e-6 ? weighted / sum / (n - 1) : 0
+    t.noise = mean > 1e-3 ? Math.min(1, Math.exp(logSum / n) / (mean + 1e-3)) : 0
     // Walls rise at spectral peaks only: bands clearly louder than their
     // neighbours, and loud in absolute terms.
     for (let i = 0; i < n; i++) {
@@ -403,7 +451,16 @@ export class FiberTunnel {
       const amp = (0.4 + 0.6 * t.level) * (1 + 0.5 * t.onset) * growth
       const shift = Math.round((t.turn / (2 * Math.PI)) * P)
       const b = t.born
-      const lumpAmp = LUMP * (0.5 + t.level) * growth
+      // Bass: bigger lumps, a wider (breathing) ring, and a tilt toward the
+      // bass/treble balance; brightness: how many waves; mids: wave height;
+      // treble × noisiness: fine jagged spikes.
+      const lumpAmp = LUMP * (0.4 + 0.6 * t.level + 1.2 * t.bass) * growth
+      const breath = 1 + BREATH * (t.bass - 0.3) * growth
+      const tilt = TILT * (t.bass - t.treble) * growth
+      const tiltDir = b * 0.23
+      const waveFreq = WAVES_MIN + (WAVES_MAX - WAVES_MIN) * t.brightness
+      const waveAmp = 0.5 + 1.2 * t.mid
+      const jag = JAG * t.treble * (0.3 + t.noise) * growth
       // Heights scale with the ring, so a tube keeps its shape as it spreads.
       const hScale = HEIGHT_UNIT * Math.pow(R / R_RIM, 0.85)
       const o = i * P
@@ -418,15 +475,21 @@ export class FiberTunnel {
         // Irregular outline: a few low lumps of unrelated sizes, drifting slowly.
         const lumps =
           0.5 * Math.sin(2 * th + b * 0.31) + 0.3 * Math.sin(3 * th - b * 0.47 + 1.7) + 0.2 * Math.sin(5 * th + b * 0.73 + 4.1)
-        const rr = R * (1 + 0.004 * t.jitter + lumpAmp * lumps)
-        // Irregular small waves (unrelated wavelengths and drift rates), as tall
-        // as the band is loud; raising them to a power keeps troughs flat and
-        // crests narrow and steep.
+        const rr = R * breath * (1 + 0.004 * t.jitter + lumpAmp * lumps)
+        // Irregular small waves: their count follows the brightness, their
+        // height the band's loudness and the mids. They run along the mirrored
+        // spectrum position u, so a non-integer count still closes seamlessly.
+        // Raising them to a power keeps troughs flat and crests narrow and steep.
         const v = t.bands[k0] * (1 - f) + t.bands[Math.min(last, k0 + 1)] * f
+        const u = this.pos[(p + shift + P * 4) % P] * Math.PI
         const waves =
-          0.5 * Math.sin(7 * th + b * 0.9) + 0.3 * Math.sin(12 * th - b * 1.3 + 2.3) + 0.2 * Math.sin(19 * th + b * 2.1 + 0.6)
-        const ripple = WAVE_HEIGHT * v * v * Math.pow(0.5 + 0.5 * waves, CREST_SHARPNESS)
-        const h = (WALL_HEIGHT * shape + ripple) * amp * hScale
+          0.5 * Math.sin(waveFreq * u + b * 0.9) +
+          0.3 * Math.sin(waveFreq * 1.7 * u - b * 1.3 + 2.3) +
+          0.2 * Math.sin(waveFreq * 2.9 * u + b * 2.1 + 0.6)
+        const ripple = WAVE_HEIGHT * waveAmp * v * v * Math.pow(0.5 + 0.5 * waves, CREST_SHARPNESS)
+        // Fine jagged spikes from noisy treble.
+        const spikes = jag * Math.pow(0.5 + 0.5 * Math.sin(31 * u + b * 3.7), 6)
+        const h = (WALL_HEIGHT * shape + ripple + spikes) * amp * hScale + tilt * hScale * Math.cos(th - tiltDir)
         const X = rr * this.cos[p]
         const Z = rr * this.sin[p]
         wx[o + p] = X
@@ -477,7 +540,7 @@ export class FiberTunnel {
       lc.lineCap = 'round'
       lc.globalAlpha = Math.min(1, 0.35 * rimWhite * this.light)
       lc.strokeStyle = tubeColor(rimTube.temperature, 0, 0.5, 0, 1, 0.3)
-      lc.lineWidth = Math.max(2, (2 * TUBE_RADIUS * focal) / zs[o]) * 7
+      lc.lineWidth = Math.max(2, (2 * TUBE_RADIUS * focal) / zs[o]) * 3.5
       this.tracePath(lc, xs, ys, o, 0, P)
       lc.stroke()
       lc.globalCompositeOperation = 'source-over'
