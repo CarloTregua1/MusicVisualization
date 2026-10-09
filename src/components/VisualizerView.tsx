@@ -3,8 +3,10 @@ import type { LoadedAudio } from '../audio/loader'
 import type { Player } from '../audio/player'
 import { Analyzer } from '../dsp/analyze'
 import { BandMapper } from '../dsp/bands'
+import { OnsetDetector } from '../dsp/onset'
 import { rms } from '../dsp/resynth'
 import { tempoAt, type TempoTrack } from '../dsp/tempo'
+import { Backdrop } from '../render/backdrop'
 import { bpmToTemperature, neon } from '../render/neon'
 import { Tunnel, type TunnelInput } from '../render/tunnel'
 import { Transport } from './Transport'
@@ -43,12 +45,12 @@ export function VisualizerView({ player, audio, tempo, tempoProgress, playing, t
     const analyzer = new Analyzer(FFT_SIZE)
     const mapper = new BandMapper(FFT_SIZE, sampleRate)
     const tunnel = new Tunnel(mapper.count)
+    const backdrop = new Backdrop()
+    const onsets = new OnsetDetector(mapper.count)
     const input: TunnelInput = { bands: mapper.levels, level: 0, lobes: 5, temperature: 0.5, beat: 0 }
     const win = new Float32Array(FFT_SIZE)
     let temp = 0.5
     let shownBpm = 120
-    let bassAvg = 0
-    let lastBeat = -1
     let speed = 1
     let last = performance.now()
     let lastHud = 0
@@ -82,14 +84,11 @@ export function VisualizerView({ player, audio, tempo, tempoProgress, playing, t
         input.lobes = 3 + pc
       }
 
-      // Beat: bass energy jumping above its running average.
-      let bass = 0
-      for (let b = 0; b < 8; b++) bass += mapper.levels[b]
-      bass /= 8
-      const isBeat = player.playing && bass > bassAvg * 1.22 && bass - bassAvg > 0.05 && t - lastBeat > 0.22
-      if (isBeat) lastBeat = t
-      bassAvg += (bass - bassAvg) * (1 - Math.exp(-realDt / 0.35))
-      input.beat = isBeat ? 1 : input.beat * Math.exp(-realDt * 12)
+      // A new string is born only on a sound onset. Near the end of the file the
+      // window is cut off by zero padding, which would look like a fake onset.
+      const inside = center + FFT_SIZE / 2 <= mono.length
+      const onset = player.playing && inside ? onsets.update(mapper.levels, t) : 0
+      input.beat = Math.max(onset, input.beat * Math.exp(-realDt * 6))
 
       const track = tempoRef.current
       const bpmNow = track ? tempoAt(track, t) : NaN
@@ -99,10 +98,9 @@ export function VisualizerView({ player, audio, tempo, tempoProgress, playing, t
       input.temperature = temp
       input.level = level
 
-      const lifetime = Math.min(3.4, Math.max(1.4, 2.6 * (120 / shownBpm)))
-      // One string per half beat.
-      const spawnInterval = Math.min(0.45, Math.max(0.18, 30 / shownBpm))
-      tunnel.update(dt, input, lifetime, 0.25 + 0.5 * temp, spawnInterval)
+      const lifetime = Math.min(2.8, Math.max(1.6, 2.2 * (120 / shownBpm)))
+      tunnel.update(dt, input, lifetime, 0.25 + 0.5 * temp, onset)
+      backdrop.draw(ctx, dt, { temperature: temp, level: player.playing ? level : 0, beat: input.beat })
       tunnel.render(ctx)
 
       if (now - lastHud > 250) {
