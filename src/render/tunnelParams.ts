@@ -1,4 +1,5 @@
 import type { SkinName } from './dancerSkins'
+import type { Lfo } from './lfo'
 
 /** Everything that defines how the tubes feel, tunable live from the Visualizer. */
 export interface TunnelParams {
@@ -101,6 +102,8 @@ export interface TunnelParams {
   bloom: number
   /** Strength of the motion trail. */
   trail: number
+  /** Four LFO slots, each sweeping one slider. */
+  lfos: Lfo[]
 }
 
 /** Starting point measured from the reference video's frames. */
@@ -150,6 +153,12 @@ export const MEASURED_PARAMS: TunnelParams = {
   dancerLight: 0.5,
   bloom: 0.6,
   trail: 0.1,
+  lfos: [
+    { on: false, target: 'wallHeight', shape: 'sine', sync: true, beats: 16, hz: 0.25, depth: 0.3 },
+    { on: false, target: 'cameraAngle', shape: 'sine', sync: true, beats: 32, hz: 0.1, depth: 0.3 },
+    { on: false, target: 'colourVariety', shape: 'triangle', sync: true, beats: 8, hz: 0.25, depth: 0.3 },
+    { on: false, target: 'bloom', shape: 'square', sync: true, beats: 4, hz: 0.5, depth: 0.3 },
+  ],
 }
 
 /** The look before measuring (11 tubes/s, slow spread). */

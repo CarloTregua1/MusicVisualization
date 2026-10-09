@@ -11,6 +11,7 @@ import { Backdrop } from '../render/backdrop'
 import { Dancer, drawDancer } from '../render/dancer'
 import { bpmToTemperature, neon } from '../render/neon'
 import { FiberTunnel, type FiberInput } from '../render/fiberTunnel'
+import { applyLfos } from '../render/lfo'
 import { MEASURED_PARAMS, type TunnelParams } from '../render/tunnelParams'
 import { Transport } from './Transport'
 import { TuningPanel } from './TuningPanel'
@@ -24,7 +25,12 @@ const PARAMS_KEY = 'audioToMath.tunnelParams'
 function loadParams(): TunnelParams {
   try {
     const saved = JSON.parse(localStorage.getItem(PARAMS_KEY) ?? 'null')
-    if (saved && typeof saved === 'object') return { ...MEASURED_PARAMS, ...saved }
+    if (saved && typeof saved === 'object') {
+      const params = { ...MEASURED_PARAMS, ...saved }
+      // Settings saved before the LFOs existed (or damaged) get the default slots.
+      if (!Array.isArray(params.lfos) || params.lfos.length !== MEASURED_PARAMS.lfos.length) params.lfos = MEASURED_PARAMS.lfos
+      return params
+    }
   } catch {
     /* storage unavailable: use defaults */
   }
@@ -67,6 +73,8 @@ export function VisualizerView({ player, audio, tempo, beats, structure, tempoPr
   const [params, setParams] = useState<TunnelParams>(loadParams)
   const [fps, setFps] = useState(60)
   const paramsRef = useRef(params)
+  // The parameters as last drawn, LFOs applied, for the Tune panel's live markers.
+  const liveParamsRef = useRef(params)
 
   const beatsRef = useRef(beats)
   const structureRef = useRef(structure)
@@ -103,6 +111,8 @@ export function VisualizerView({ player, audio, tempo, beats, structure, tempoPr
       return d
     })
     let lastT = 0
+    // Free-running LFO clock: follows the eased dt, so it drifts on slowly while paused.
+    let lfoSeconds = 0
     const backdrop = new Backdrop()
     // Sensitive enough to catch softer events (hats, plucks), up to ~5 strings a second.
     const onsets = new OnsetDetector(mapper.count, 0.18, 1.7, 8)
@@ -148,7 +158,26 @@ export function VisualizerView({ player, audio, tempo, beats, structure, tempoPr
       // zero padding, which would look like a fake onset.
       const inside = center + FFT_SIZE / 2 <= mono.length
       const onset = player.playing && inside ? onsets.update(mapper.levels, t) : 0
-      const sens = paramsRef.current.songSensitivity
+      const track = tempoRef.current
+      const bpmNow = track ? tempoAt(track, t) : NaN
+      if (!Number.isNaN(bpmNow)) shownBpm = bpmNow
+      const beatNow = beatsRef.current
+        ? beatPhase(beatsRef.current, t)
+        : (() => {
+            const x = (t * shownBpm) / 60
+            return { index: Math.floor(x), phase: x - Math.floor(x), period: 60 / shownBpm }
+          })()
+      // Phrase the dance in bars: beat 0 of the grid is the song's first downbeat.
+      const song = structureRef.current
+      const barBeat = song ? { ...beatNow, index: beatNow.index - song.downbeat } : beatNow
+
+      // The tuned parameters with the LFOs applied: synced ones on the bar grid,
+      // free ones on their own clock.
+      lfoSeconds += dt
+      const pr = applyLfos(paramsRef.current, { beats: barBeat.index + barBeat.phase, seconds: lfoSeconds })
+      liveParamsRef.current = pr
+
+      const sens = pr.songSensitivity
       // Exponential mapping: sensitivity 0 needs big jumps (strong hits only);
       // 1 accepts changes well below the recent average (every small change).
       // On the reference song this spans ~6 to ~14 tubes per second.
@@ -158,17 +187,14 @@ export function VisualizerView({ player, audio, tempo, beats, structure, tempoPr
       const sounding = player.playing && inside
       beat = Math.max(onset, beat * Math.exp(-realDt * 6))
 
-      const track = tempoRef.current
-      const bpmNow = track ? tempoAt(track, t) : NaN
-      if (!Number.isNaN(bpmNow)) shownBpm = bpmNow
       // Temperature glides (~1.5 s) so tempo changes read as a colour sweep.
       temp += (bpmToTemperature(shownBpm) - temp) * (1 - Math.exp(-realDt / 1.5))
       input.temperature = temp
       input.level = level
 
       // Rings spread over the tuned time; faster music spreads a little faster.
-      tunnel.params = paramsRef.current
-      const spread = paramsRef.current.spreadSeconds
+      tunnel.params = pr
+      const spread = pr.spreadSeconds
       const lifetime = spread * Math.min(1.3, Math.max(0.75, 120 / shownBpm))
       tunnel.update(dt, input, sounding, onset, lifetime, songEvent)
       frames++
@@ -177,7 +203,6 @@ export function VisualizerView({ player, audio, tempo, beats, structure, tempoPr
 
       // The dancer, standing in the crater, moving on the tracked beats (or on
       // the BPM until the beat tracker has finished).
-      const pr = paramsRef.current
       const levels = mapper.levels
       const n = levels.length
       const third = Math.floor(n / 3)
@@ -191,15 +216,6 @@ export function VisualizerView({ player, audio, tempo, beats, structure, tempoPr
         sum += levels[i]
         weighted += levels[i] * i
       }
-      const beatNow = beatsRef.current
-        ? beatPhase(beatsRef.current, t)
-        : (() => {
-            const x = (t * shownBpm) / 60
-            return { index: Math.floor(x), phase: x - Math.floor(x), period: 60 / shownBpm }
-          })()
-      // Phrase the dance in bars: beat 0 of the grid is the song's first downbeat.
-      const song = structureRef.current
-      const barBeat = song ? { ...beatNow, index: beatNow.index - song.downbeat } : beatNow
       // A drop happened if we just played across one (not on seeks).
       let drop = false
       if (song && t > lastT && t - lastT < 0.25) for (const d of song.drops) if (d > lastT && d <= t) drop = true
@@ -326,7 +342,7 @@ export function VisualizerView({ player, audio, tempo, beats, structure, tempoPr
           {fullscreen ? 'Exit full screen' : 'Full screen'}
         </button>
       </div>
-      {tuning && <TuningPanel params={params} fps={fps} onChange={setParams} onClose={() => setTuning(false)} />}
+      {tuning && <TuningPanel params={params} live={liveParamsRef} fps={fps} onChange={setParams} onClose={() => setTuning(false)} />}
       <div className="viz-tempo hud">
         <div className="bpm">
           {tempo ? (Number.isNaN(bpm) ? '—' : Math.round(bpm)) : `${Math.round(tempoProgress * 100)}%`}

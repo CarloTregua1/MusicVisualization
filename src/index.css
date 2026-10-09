@@ -245,3 +245,27 @@ input[type='checkbox'] { accent-color: var(--accent); width: 15px; height: 15px;
 .tune-seg button { flex: 1; color: rgba(255, 255, 255, 0.7); }
 .tune-seg button[aria-pressed='true'] { background: #fff; color: #000; }
 .tune-select { width: 100%; margin-top: 6px; background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.18); color: #fff; border-radius: 8px; padding: 6px 8px; font-size: 13.5px; }
+.tune-row em { font-style: normal; display: inline-flex; align-items: center; gap: 6px; }
+.lfo { padding: 6px 0; }
+.lfo + .lfo { border-top: 1px dashed rgba(255, 255, 255, 0.08); }
+.lfo-head { display: flex; align-items: center; gap: 8px; }
+.lfo-head .tune-select { flex: 1; margin-top: 0; }
+.lfo:not(.on) .lfo-head .tune-select { opacity: 0.55; }
+.lfo-toggle {
+  width: 28px; height: 28px; flex: none; border-radius: 50%; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+  background: transparent; color: rgba(255, 255, 255, 0.7); border: 1px solid rgba(255, 255, 255, 0.3);
+}
+.lfo-toggle[aria-pressed='true'] { background: #fff; color: #000; border-color: #fff; }
+.lfo-shapes button { font-size: 15px; }
+.lfo-rate { display: flex; align-items: center; gap: 8px; }
+.lfo-rate .tune-seg { flex: none; }
+.lfo-rate .tune-select { flex: 1; }
+.lfo-hz { flex: 1; display: block; margin-top: 6px; font-size: 12px; text-align: right; }
+.lfo-hz input { width: 100%; accent-color: #fff; margin: 2px 0 0; }
+.lfo-tag { font-style: normal; font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; padding: 1px 5px; border-radius: 4px; background: rgba(255, 255, 255, 0.85); color: #000; }
+/* Live value under a slider an LFO is moving. */
+.tune-row.lfo-target { position: relative; }
+.tune-row.lfo-target::after {
+  content: ''; position: absolute; bottom: 1px; height: 3px; width: 3px; border-radius: 2px; background: #fff;
+  box-shadow: 0 0 6px #fff; left: calc(7px + (100% - 14px) * var(--live, 0)); transform: translateX(-50%);
+}
