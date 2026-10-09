@@ -6,7 +6,7 @@ import { MEASURED_PARAMS, type TunnelParams } from './tunnelParams'
 const MAX_TUBES = 640
 const POINTS = 160
 /** Each tube is drawn in this many arcs, depth-sorted and lit separately. */
-const SEGMENTS = 8
+const SEGMENTS = 6
 /** Ring radii on the ground: tubes develop at the crater rim and grow until R_MAX. */
 const R_RIM = 1
 const R_MAX = 6
@@ -121,9 +121,15 @@ export class FiberTunnel {
   /** Segment draw list for depth sorting: tube index × SEGMENTS + segment, and its depth. */
   private readonly order = new Int32Array(MAX_TUBES * SEGMENTS)
   private readonly orderDepth = new Float32Array(MAX_TUBES * SEGMENTS)
-  /** Scratch: one segment's points shifted toward the light, for its highlight. */
+  /** Scratch: unit screen direction from each point of a segment toward the light… */
+  private readonly toLightX = new Float32Array(POINTS)
+  private readonly toLightY = new Float32Array(POINTS)
+  /** …and the segment's points shifted along it, for the lit core and glint. */
   private readonly hlX = new Float32Array(POINTS)
   private readonly hlY = new Float32Array(POINTS)
+  // Lighting terms from the last shade() call.
+  private shadeSpec = 0
+  private shadeEdge = 0
   private readonly layer: HTMLCanvasElement
   private readonly trail: HTMLCanvasElement
   private readonly bloom: HTMLCanvasElement
@@ -447,8 +453,9 @@ export class FiberTunnel {
         // Fine jagged spikes from noisy treble.
         const spikes = jag * Math.pow(0.5 + 0.5 * Math.sin(31 * u + b * 3.7), 6)
         const h = (pr.wallHeight * shape + ripple + spikes) * amp * hScale + tilt * hScale * Math.cos(th - tiltDir)
-        const X = rr * this.cos[p]
-        const Z = rr * this.sin[p]
+        // Walls curl outward as they rise, like the reference's towers.
+        const X = (rr + pr.curl * h) * this.cos[p]
+        const Z = (rr + pr.curl * h) * this.sin[p]
         wx[o + p] = X
         wy[o + p] = h
         wz[o + p] = Z
@@ -524,34 +531,72 @@ export class FiberTunnel {
       const tint = t.jitter * 16
       const width = Math.max(0.9, (2 * pr.tubeRadius * Math.pow(R / R_RIM, pr.thicknessGrowth) * focal) / zs[o + pc])
       const nb = i > 0 ? i - 1 : i + 1 < this.count ? i + 1 : -1
-      const lit = nb >= 0 ? this.shade(i, nb, pc, camX, camY, camZ) : AMBIENT + this.light
+      let lit = AMBIENT + this.light
+      this.shadeSpec = this.shadeEdge = 0
+      if (nb >= 0) lit = this.shade(i, nb, pc, camX, camY, camZ)
       // A developing tube glows with the light it emits.
       const light = white > 0 ? lit + (this.light - lit) * white : lit
       const pos = this.pos[(pc + shift + P * 4) % P]
 
-      lc.globalAlpha = fade
-      // Dark edge, lit body, then a highlight on the side facing the light.
-      lc.strokeStyle = '#000'
-      lc.lineWidth = width
+      const rimWhite = white * this.light
+      const colour = (l: number) => tubeColor(t.temperature, depth, pos, tint, l, rimWhite)
       this.tracePath(lc, xs, ys, o, a, b)
+
+      // Contact shadow: a soft dark band that darkens whatever lies behind.
+      // Thin, distant tubes can't show shadows, glints or edge glow: skip them there.
+      const detailed = width > 2.2
+      if (pr.shadow > 0 && detailed) {
+        lc.globalAlpha = fade * pr.shadow
+        lc.strokeStyle = '#000'
+        lc.lineWidth = width * 1.9
+        lc.stroke()
+      }
+      // Edge glow: tube edges seen against the light catch it.
+      const edge = this.shadeEdge * pr.edgeGlow
+      if (edge > 0.03 && detailed) {
+        lc.globalCompositeOperation = 'lighter'
+        lc.globalAlpha = Math.min(1, fade * edge)
+        lc.strokeStyle = colour(light * 1.2 + 0.2)
+        lc.lineWidth = width * 1.3
+        lc.stroke()
+        lc.globalCompositeOperation = 'source-over'
+      }
+      // Round cylinder: a dark edge in the tube's own colour, then a mid-tone body…
+      lc.globalAlpha = fade
+      lc.strokeStyle = colour(light * 0.3)
+      lc.lineWidth = width
       lc.stroke()
-      lc.strokeStyle = tubeColor(t.temperature, depth, pos, tint, light, white * this.light)
-      lc.lineWidth = width * 0.66
+      lc.strokeStyle = colour(light * 0.75)
+      lc.lineWidth = width * 0.74
       lc.stroke()
-      if (width > 1.6) {
-        const off = width * 0.17
+      if (detailed) {
+        // …then a lit core shifted toward the light, and a glint where the
+        // surface reflects the rim toward the camera.
         for (let k = a - 1; k <= b + 1; k++) {
           const j = o + (((k % P) + P) % P)
+          const m = ((k % P) + P) % P
           const dx = lightSX - xs[j]
           const dy = lightSY - ys[j]
           const d = Math.hypot(dx, dy) || 1
-          const m = (((k % P) + P) % P)
-          this.hlX[m] = xs[j] + (dx / d) * off
-          this.hlY[m] = ys[j] + (dy / d) * off
+          this.toLightX[m] = dx / d
+          this.toLightY[m] = dy / d
         }
-        lc.strokeStyle = tubeColor(t.temperature, depth, pos, tint, Math.min(1.6, light * 1.6 + 0.08), white * this.light)
-        lc.lineWidth = width * 0.22
+        this.shiftTowardLight(o, a, b, width * 0.12)
+        lc.strokeStyle = colour(light * 1.05)
+        lc.lineWidth = width * 0.4
         this.tracePath(lc, this.hlX, this.hlY, 0, a, b)
+        lc.stroke()
+        const glint = this.shadeSpec * pr.specular
+        if (glint > 0.04) {
+          this.shiftTowardLight(o, a, b, width * 0.24)
+          lc.strokeStyle = colour(light * 1.1 + glint * 1.5)
+          lc.lineWidth = width * 0.14
+          this.tracePath(lc, this.hlX, this.hlY, 0, a, b)
+          lc.stroke()
+        }
+      } else {
+        lc.strokeStyle = colour(light)
+        lc.lineWidth = width * 0.4
         lc.stroke()
       }
     }
@@ -559,11 +604,24 @@ export class FiberTunnel {
     lc.globalCompositeOperation = 'source-over'
   }
 
+  /** Fills hlX/hlY with points a..b of the tube at offset o moved `off` px toward the light. */
+  private shiftTowardLight(o: number, a: number, b: number, off: number) {
+    const P = POINTS
+    for (let k = a - 1; k <= b + 1; k++) {
+      const m = ((k % P) + P) % P
+      this.hlX[m] = this.xs[o + m] + this.toLightX[m] * off
+      this.hlY[m] = this.ys[o + m] + this.toLightY[m] * off
+    }
+  }
+
   /**
-   * Lighting at point p of live tube i from the white rim, treating the
-   * rings as samples of a surface: the normal comes from the tangent along
-   * the ring and the step to the neighbouring ring `nb`, turned toward the
-   * camera (the visible side).
+   * Lighting at point p of live tube i, treating the rings as samples of a
+   * surface: the normal comes from the tangent along the ring and the step
+   * to the neighbouring ring `nb`, turned toward the camera (the visible
+   * side). The light is the whole white rim: each point is lit from the
+   * nearest point on it. Returns the diffuse + fill brightness, and leaves
+   * the glint (specular) and backlit edge (fresnel) terms in shadeSpec /
+   * shadeEdge. Everything scales with the music, so silence goes dark.
    */
   private shade(i: number, nb: number, p: number, camX: number, camY: number, camZ: number): number {
     const P = POINTS
@@ -592,16 +650,40 @@ export class FiberTunnel {
       ny = -ny
       nz = -nz
     }
-    let lx = -px
+    // Nearest point on the white rim (a ring over the crater's edge).
+    const phi = Math.atan2(pz, px)
+    let lx = R_RIM * Math.cos(phi) - px
     let ly = LIGHT_HEIGHT - py
-    let lz = -pz
+    let lz = R_RIM * Math.sin(phi) - pz
     const dist = Math.hypot(lx, ly, lz) || 1
     lx /= dist
     ly /= dist
     lz /= dist
     const atten = 1 / (1 + (dist / this.params.lightFalloff) ** 2)
-    const diffuse = 0.35 + 0.65 * Math.max(0, nx * lx + ny * ly + nz * lz)
-    return AMBIENT + this.light * 2.1 * diffuse * atten
+    const ndl = nx * lx + ny * ly + nz * lz
+    const diffuse = 0.3 + 0.7 * Math.max(0, ndl)
+    // View direction, for the glint, the edge glow and the fill light.
+    let vx = camX - px
+    let vy = camY - py
+    let vz = camZ - pz
+    const vl = Math.hypot(vx, vy, vz) || 1
+    vx /= vl
+    vy /= vl
+    vz /= vl
+    const ndv = Math.max(0, nx * vx + ny * vy + nz * vz)
+    let hx = lx + vx
+    let hy = ly + vy
+    let hz = lz + vz
+    const hl = Math.hypot(hx, hy, hz) || 1
+    hx /= hl
+    hy /= hl
+    hz /= hl
+    this.shadeSpec = Math.pow(Math.max(0, nx * hx + ny * hy + nz * hz), 32) * atten * 2 * this.light
+    // Backlit fresnel: grazing surfaces with the light behind them glow.
+    const backlit = Math.max(0, -(vx * lx + vy * ly + vz * lz))
+    this.shadeEdge = Math.pow(1 - ndv, 3) * (0.3 + 0.7 * backlit) * atten * 1.6 * this.light
+    const fill = this.params.fill * ndv * this.light
+    return AMBIENT + this.light * 2.1 * diffuse * atten + fill
   }
 
   /**

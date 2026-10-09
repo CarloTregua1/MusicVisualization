@@ -51,7 +51,7 @@ interface Props {
 export function VisualizerView({ player, audio, tempo, tempoProgress, playing, time, onSeek, onExit }: Props) {
   const root = useRef<HTMLDivElement>(null)
   // Pixel budget keeps big full-screen displays smooth; bloom hides the softness.
-  const canvas = useCanvas(1.5, 2.2e6)
+  const canvas = useCanvas(1.5, 1.6e6)
   const tempoRef = useRef(tempo)
   const [bpm, setBpm] = useState<number>(NaN)
   const [temperature, setTemperature] = useState(0.5)

@@ -36,6 +36,8 @@ export interface TunnelParams {
   tilt: number
   /** Fine jagged spikes from noisy treble. */
   jag: number
+  /** How much walls curl outward as they rise (radial lean per unit of height). */
+  curl: number
   /** Smoothing (s) of the sound between consecutive tubes: higher = more coherent, lower = more varied. */
   coherence: number
   /** Camera angle looking down at the crater, degrees. */
@@ -46,6 +48,14 @@ export interface TunnelParams {
   focal: number
   /** Distance over which the rim's light falls off, in crater radii. */
   lightFalloff: number
+  /** Soft contact shadow under each tube, darkening what lies behind it. */
+  shadow: number
+  /** Strength of the glints where a tube reflects the rim's light toward the camera. */
+  specular: number
+  /** Glow along tube edges seen against the light. */
+  edgeGlow: number
+  /** Cool fill light from the camera's side, so distant tubes keep their form. */
+  fill: number
   /** Strength of the glow (bloom). */
   bloom: number
   /** Strength of the motion trail. */
@@ -70,11 +80,16 @@ export const MEASURED_PARAMS: TunnelParams = {
   breath: 0.06,
   tilt: 0.5,
   jag: 0.35,
+  curl: 0.25,
   coherence: 0.06,
   cameraAngle: 45,
   cameraRange: 10,
   focal: 2.1,
   lightFalloff: 3.2,
+  shadow: 0.45,
+  specular: 0.8,
+  edgeGlow: 0.5,
+  fill: 0.12,
   bloom: 0.6,
   trail: 0.1,
 }
@@ -121,10 +136,15 @@ export const PARAM_SPECS: ParamSpec[] = [
   { key: 'breath', label: 'Bass breathing', group: 'Shape', min: 0, max: 0.3, step: 0.01 },
   { key: 'tilt', label: 'Tilt', group: 'Shape', min: 0, max: 2, step: 0.05 },
   { key: 'jag', label: 'Spikes', group: 'Shape', min: 0, max: 1.5, step: 0.05 },
+  { key: 'curl', label: 'Wall curl', group: 'Shape', min: -0.5, max: 1, step: 0.05 },
   { key: 'cameraAngle', label: 'Camera angle (°)', group: 'Camera', min: 5, max: 85, step: 1 },
   { key: 'cameraRange', label: 'Camera distance', group: 'Camera', min: 4, max: 20, step: 0.1 },
   { key: 'focal', label: 'Zoom', group: 'Camera', min: 0.8, max: 4, step: 0.05 },
   { key: 'lightFalloff', label: 'Light reach', group: 'Light', min: 0.5, max: 10, step: 0.1 },
+  { key: 'shadow', label: 'Contact shadow', group: 'Light', min: 0, max: 1, step: 0.05 },
+  { key: 'specular', label: 'Glints', group: 'Light', min: 0, max: 2, step: 0.05 },
+  { key: 'edgeGlow', label: 'Edge glow', group: 'Light', min: 0, max: 1.5, step: 0.05 },
+  { key: 'fill', label: 'Fill light', group: 'Light', min: 0, max: 0.6, step: 0.01 },
   { key: 'bloom', label: 'Glow', group: 'Light', min: 0, max: 1.5, step: 0.05 },
   { key: 'trail', label: 'Trail', group: 'Light', min: 0, max: 0.8, step: 0.01 },
 ]
