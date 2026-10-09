@@ -200,23 +200,7 @@ const HEAD_STARS = (() => {
     const a = rnd() * Math.PI * 2
     return { x: r * Math.cos(a), y: r * Math.sin(a), size: 0.45 + rnd() * (i < 4 ? 1.1 : 0.7), phase: rnd() * Math.PI * 2, speed: 1.5 + rnd() * 3, drift: rnd() * Math.PI * 2 }
   })
-  // Threads: each star to its two nearest neighbours (each pair once).
-  const edges: [number, number][] = []
-  const seen = new Set<string>()
-  stars.forEach((st, i) => {
-    stars
-      .map((o, j) => ({ j, d: i === j ? Infinity : Math.hypot(o.x - st.x, o.y - st.y) }))
-      .sort((p, q) => p.d - q.d)
-      .slice(0, 2)
-      .forEach(({ j }) => {
-        const key = i < j ? `${i}-${j}` : `${j}-${i}`
-        if (!seen.has(key)) {
-          seen.add(key)
-          edges.push([i, j])
-        }
-      })
-  })
-  return { stars, edges }
+  return { stars }
 })()
 
 /**
@@ -241,17 +225,12 @@ function star(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, in
 }
 
 /**
- * Constellation: joints as stars, bones as faint threads between them, and a
+ * Constellation: loose stars at the joints, and a
  * head made of a cloud of stars — a small swirling star map that rotates,
  * twinkles and swells on the beat.
  */
 function paintConstellation(c: SkinContext) {
   const { ctx, sk, X, Y, colour, light, time } = c
-  const bones: [keyof Skeleton, keyof Skeleton][] = [
-    ['neck', 'pelvis'], ['neck', 'shoulderL'], ['neck', 'shoulderR'],
-    ['shoulderL', 'elbowL'], ['elbowL', 'handL'], ['shoulderR', 'elbowR'], ['elbowR', 'handR'],
-    ['pelvis', 'hipL'], ['pelvis', 'hipR'], ['hipL', 'kneeL'], ['kneeL', 'footL'], ['hipR', 'kneeR'], ['kneeR', 'footR'],
-  ]
   const alpha = Math.min(1, c.sceneLight)
   // How much brighter than the scene light the beat makes it (≥ 1 on a flash).
   const beat = Math.max(0, light / Math.max(0.01, c.sceneLight) - 1)
@@ -297,29 +276,6 @@ function paintConstellation(c: SkinContext) {
     ctx.fillStyle = g
     ctx.fillRect(hx - rx * 1.5, hy - rx * 1.5, rx * 3, rx * 3)
   }
-
-  // Body threads, the neck reaching up into the cloud.
-  ctx.globalAlpha = Math.min(1, 0.75 * alpha)
-  ctx.strokeStyle = colour(light * 1.0)
-  ctx.lineWidth = Math.max(1.2, c.H * 0.01)
-  ctx.beginPath()
-  for (const [a, b] of bones) {
-    ctx.moveTo(X(sk[a]), Y(sk[a]))
-    ctx.lineTo(X(sk[b]), Y(sk[b]))
-  }
-  ctx.moveTo(X(sk.neck), Y(sk.neck))
-  ctx.lineTo(hx - dx * ry * 0.8, hy - dy * ry * 0.8)
-  ctx.stroke()
-
-  // Threads inside the head cloud.
-  ctx.globalAlpha = Math.min(1, 0.5 * alpha)
-  ctx.lineWidth = Math.max(0.8, c.H * 0.0045)
-  ctx.beginPath()
-  for (const [i, j] of HEAD_STARS.edges) {
-    ctx.moveTo(pts[i].x, pts[i].y)
-    ctx.lineTo(pts[j].x, pts[j].y)
-  }
-  ctx.stroke()
 
   // Body stars at the joints.
   for (const name of Object.keys(sk) as (keyof Skeleton)[]) {
