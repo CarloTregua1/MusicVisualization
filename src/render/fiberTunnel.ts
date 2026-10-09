@@ -6,16 +6,14 @@ const POINTS = 160
 /** Each tube is shaded in this many arcs, so its lighting and colour vary along it. */
 const SEGMENTS = 6
 /** Tubes born per second: each spends 1/TUBE_RATE s developing as the white innermost tube. */
-const TUBE_RATE = 15
+const TUBE_RATE = 8
 /** Camera-space depths: tubes develop at Z_FAR (the hollow) and die past Z_NEAR. */
-const Z_FAR = 3.3
+const Z_FAR = 2.5
 const Z_NEAR = 0.35
 /** Time constant (s) of the spectrum smoothing, so consecutive tubes stack coherently. */
 const COHERENCE = 0.06
-/** Camera height relative to the tunnel axis (negative = below), as in the reference's low view. */
-const CAMERA_HEIGHT = -0.4
-/** Vertical aim offset, as a fraction of screen height, keeping the hollow framed. */
-const AIM = 0.05
+/** Camera height above the tunnel axis, close to the top surface (the wall is at 1). */
+const CAMERA_HEIGHT = 0.72
 /** World radius of a tube's cross-section, in tunnel radii. */
 const TUBE_RADIUS = 0.008
 /** Height of the tallest walls, in tunnel radii. Walls grow straight up. */
@@ -28,9 +26,10 @@ const WALL_MIN_CONTRAST = 0.02
 const WALL_CONTRAST = 0.12
 /** Bell weights used to spread each peak over its neighbours, so walls are rounded curtains. */
 const WALL_SPREAD = [1, 3, 4, 3, 1]
-/** Small waves along each tube, driven by loudness: how many around the loop, and their height. */
-const WAVE_COUNT = 13
+/** Small irregular waves along each tube; their height follows the loudness. */
 const WAVE_HEIGHT = 0.3
+/** Irregular lumps in each tube's outline (and so in the hollow's rim), in tunnel radii. */
+const LUMP = 0.1
 /** After its development, a tube fades from white to its colour over this long (s). */
 const COOL_TIME = 0.12
 /** Light from the white tube falls off over this distance (tunnel radii). */
@@ -58,8 +57,9 @@ interface Tube {
   jitter: number
   /** Rotation of the spectrum layout: successive tubes turn slowly, so the stack swirls. */
   turn: number
-  /** Phase of the small waves; drifts slowly from tube to tube so neighbours stay coherent. */
-  wave: number
+  /** Birth time: sets the phases of its waves and lumps, which drift slowly from
+   * tube to tube so neighbours stay coherent while the pattern never repeats. */
+  born: number
 }
 
 export interface FiberInput {
@@ -152,7 +152,7 @@ export class FiberTunnel {
       age: 0,
       jitter: 0,
       turn: 0,
-      wave: 0,
+      born: 0,
     }))
     this.smoothBands = new Float32Array(bandCount)
     this.rawPeaks = new Float32Array(bandCount)
@@ -234,7 +234,7 @@ export class FiberTunnel {
     t.age = 0
     t.jitter = ((this.head * 0.618034) % 1) - 0.5
     t.turn = 0.45 * Math.sin(this.time * 0.07) + 0.15 * Math.sin(this.time * 0.19 + 1)
-    t.wave = this.time * 0.9
+    t.born = this.time
   }
 
   private develop(t: Tube, input: FiberInput, onset: number) {
@@ -364,7 +364,7 @@ export class FiberTunnel {
     lc.drawImage(this.trail, -cx, -cy, W, H)
     lc.restore()
 
-    if (this.count > 0) this.drawTubes(lc, cx, cy, focal, H)
+    if (this.count > 0) this.drawTubes(lc, cx, cy, focal)
 
     lc.setTransform(1, 0, 0, 1, 0, 0)
     tc.globalCompositeOperation = 'copy'
@@ -389,10 +389,12 @@ export class FiberTunnel {
     ctx.globalCompositeOperation = 'source-over'
   }
 
-  private drawTubes(lc: CanvasRenderingContext2D, cx: number, cy: number, focal: number, H: number) {
+  private drawTubes(lc: CanvasRenderingContext2D, cx: number, cy: number, focal: number) {
     const camX = 0.12 * Math.sin(this.time * 0.11)
-    const camY = CAMERA_HEIGHT + 0.08 * Math.sin(this.time * 0.08 + 1.3)
-    const aimY = AIM * H
+    const camY = CAMERA_HEIGHT + 0.04 * Math.sin(this.time * 0.08 + 1.3)
+    // Aim at the hollow: shift the view so the far end of the tunnel is centred.
+    const aimX = camX * (focal / Z_FAR)
+    const aimY = -camY * (focal / Z_FAR)
     const last = this.tubes[0].bands.length - 1
     const logSpan = Math.log(Z_FAR / Z_NEAR)
     const develop = 1 / TUBE_RATE
@@ -408,20 +410,29 @@ export class FiberTunnel {
       const growth = smooth(0, develop, t.age)
       const amp = (0.4 + 0.6 * t.level) * (1 + 0.5 * t.onset) * growth
       const shift = Math.round((t.turn / (2 * Math.PI)) * P)
-      const ox = cx - camX * s
+      const ox = cx + aimX - camX * s
       const oy = cy + aimY + camY * s
       const o = i * P
+      // Phases of this tube's lumps and waves, set by its birth time.
+      const b = t.born
+      const lumpAmp = LUMP * (0.5 + t.level) * growth
       for (let p = 0; p < P; p++) {
         const q = this.pos[(p + shift + P * 4) % P] * last
         const k0 = q | 0
         const f = q - k0
         const lift = t.peaks[k0] * (1 - f) + t.peaks[Math.min(last, k0 + 1)] * f
         const shape = lift * lift * (3 - 2 * lift)
-        const r = 1 + 0.004 * t.jitter
-        // Many small waves, as tall as the band is loud, plus walls at the peaks.
-        const v = t.bands[k0] * (1 - f) + t.bands[Math.min(last, k0 + 1)] * f
         const th = (p / P) * 2 * Math.PI
-        const ripple = WAVE_HEIGHT * v * v * (0.5 + 0.5 * Math.sin(WAVE_COUNT * th + t.wave))
+        // Irregular outline: a few low lumps of unrelated sizes, drifting slowly.
+        const lumps =
+          0.5 * Math.sin(2 * th + b * 0.31) + 0.3 * Math.sin(3 * th - b * 0.47 + 1.7) + 0.2 * Math.sin(5 * th + b * 0.73 + 4.1)
+        const r = 1 + 0.004 * t.jitter + lumpAmp * lumps
+        // Irregular small waves (unrelated wavelengths and drift rates), as tall
+        // as the band is loud, plus walls at the peaks.
+        const v = t.bands[k0] * (1 - f) + t.bands[Math.min(last, k0 + 1)] * f
+        const waves =
+          0.5 * Math.sin(7 * th + b * 0.9) + 0.3 * Math.sin(12 * th - b * 1.3 + 2.3) + 0.2 * Math.sin(19 * th + b * 2.1 + 0.6)
+        const ripple = WAVE_HEIGHT * v * v * (0.5 + 0.5 * waves)
         const h = (WALL_HEIGHT * shape + ripple) * amp * this.wallWeight[p]
         const x = ox + r * this.cos[p] * s
         const y = oy + (r * this.sin[p] - h) * s
@@ -455,8 +466,8 @@ export class FiberTunnel {
       const tint = t.jitter * 16
       const nb = i + 1 < this.count ? i + 1 : i - 1
       // Highlight side: toward the light, i.e. toward the hollow's centre.
-      const hx = cx - camX * (focal / Z_FAR)
-      const hy = cy + aimY + camY * (focal / Z_FAR)
+      const hx = cx
+      const hy = cy
 
       // The white tube is the light: a halo whose strength follows the music.
       if (white > 0.02) {
