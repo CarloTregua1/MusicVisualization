@@ -1,4 +1,5 @@
 import { RollCamera } from './camera'
+import { tubeColor } from './tubeColor'
 import { MEASURED_PARAMS, type TunnelParams } from './tunnelParams'
 
 /** Upper bound on tubes alive at once (40/s × 16 s at the slider limits). */
@@ -19,8 +20,6 @@ const WALL_MIN_CONTRAST = 0.02
 const WALL_CONTRAST = 0.12
 /** Weights used to spread each peak over its neighbours. */
 const WALL_SPREAD = [1, 4, 1]
-/** After its development, a tube fades from white to its colour over this long (s). */
-const COOL_TIME = 0.12
 /** The light: the white rim, modelled as a point this high above the crater's centre. */
 const LIGHT_HEIGHT = 0.6
 /** How quickly the scene light follows the music (s): silence goes dark almost at once. */
@@ -74,21 +73,6 @@ const smooth = (e0: number, e1: number, x: number) => {
   return t * t * (3 - 2 * t)
 }
 
-/**
- * Tube colour. Age drives the hue ramp, as in the reference: tubes just out
- * of development are pink, older ones cool through purple and blue to teal.
- * Tempo shifts the ramp colder or hotter, and the position around the
- * spectrum tints it. `light` sets the brightness; `white` (1 while
- * developing) burns it to white.
- */
-function tubeColor(temperature: number, depth: number, pos: number, tint: number, light: number, white: number): string {
-  const hue = 320 - 135 * depth + (temperature - 0.5) * 110 + (pos - 0.5) * 36 + tint
-  let l = 4 + 54 * light
-  l += (97 - l) * white
-  const lightness = Math.min(97, Math.max(2, l))
-  const sat = 100 - 80 * white
-  return `hsl(${(((hue % 360) + 360) % 360).toFixed(0)}, ${sat.toFixed(0)}%, ${lightness.toFixed(0)}%)`
-}
 
 /**
  * A volcano of glowing tubes on flat land, following the reference:
@@ -501,12 +485,11 @@ export class FiberTunnel {
 
     // The white rim is the light: a halo whose strength follows the music.
     const rimTube = this.tube(this.count - 1)
-    const rimWhite = 1 - smooth(develop, develop + COOL_TIME, rimTube.age)
-    if (rimWhite > 0.02 && this.light > 0.01) {
+    if (this.light > 0.01) {
       const o = (this.count - 1) * P
       lc.globalCompositeOperation = 'lighter'
       lc.lineCap = 'round'
-      lc.globalAlpha = Math.min(1, 0.35 * rimWhite * this.light)
+      lc.globalAlpha = Math.min(1, 0.35 * this.light)
       lc.strokeStyle = tubeColor(rimTube.temperature, 0, 0.5, 0, 1, 0.3)
       lc.lineWidth = Math.max(2, (2 * pr.tubeRadius * focal) / zs[o]) * 3.5
       this.tracePath(lc, xs, ys, o, 0, P)
@@ -530,7 +513,9 @@ export class FiberTunnel {
       const b = Math.round(((sg + 1) * P) / SEGMENTS)
       const pc = (a + b) >> 1
       const shift = Math.round((t.turn / (2 * Math.PI)) * P)
-      const white = 1 - smooth(develop, develop + COOL_TIME, t.age)
+      // Only the innermost tube is ever white: the moment a newer tube is born,
+      // this one takes its colour (tubeColor caps every other tube's lightness).
+      const white = i === this.count - 1 ? 1 : 0
       const tint = t.jitter * 16
       const width = Math.max(0.9, (2 * pr.tubeRadius * Math.pow(R / R_RIM, pr.thicknessGrowth) * focal) / zs[o + pc])
       const nb = i > 0 ? i - 1 : i + 1 < this.count ? i + 1 : -1
