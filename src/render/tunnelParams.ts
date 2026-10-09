@@ -63,6 +63,12 @@ export interface TunnelParams {
   edgeGlow: number
   /** Cool fill light from the camera's side, so distant tubes keep their form. */
   fill: number
+  /** Colour from frequency (0 = age ramp only, 1 = fully by frequency). */
+  colourVariety: number
+  /** Random moments per minute when the light cuts out while music plays (0 = never). */
+  blackoutsPerMinute: number
+  /** Average length of a blackout, seconds. */
+  blackoutLength: number
   /** Strength of the glow (bloom). */
   bloom: number
   /** Strength of the motion trail. */
@@ -98,6 +104,9 @@ export const MEASURED_PARAMS: TunnelParams = {
   specular: 0.8,
   edgeGlow: 0.5,
   fill: 0.12,
+  colourVariety: 0.6,
+  blackoutsPerMinute: 4,
+  blackoutLength: 0.7,
   bloom: 0.6,
   trail: 0.1,
 }
@@ -154,5 +163,8 @@ export const PARAM_SPECS: ParamSpec[] = [
   { key: 'edgeGlow', label: 'Edge glow', group: 'Light', min: 0, max: 1.5, step: 0.05 },
   { key: 'fill', label: 'Fill light', group: 'Light', min: 0, max: 0.6, step: 0.01 },
   { key: 'bloom', label: 'Glow', group: 'Light', min: 0, max: 1.5, step: 0.05 },
+  { key: 'blackoutsPerMinute', label: 'Blackouts per minute', group: 'Light', min: 0, max: 20, step: 0.5 },
+  { key: 'blackoutLength', label: 'Blackout length (s)', group: 'Light', min: 0.1, max: 3, step: 0.05 },
+  { key: 'colourVariety', label: 'Colour variety', group: 'Colour', min: 0, max: 1, step: 0.05 },
   { key: 'trail', label: 'Trail', group: 'Light', min: 0, max: 0.8, step: 0.01 },
 ]

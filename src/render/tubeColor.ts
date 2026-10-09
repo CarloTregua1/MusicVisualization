@@ -6,18 +6,36 @@
 export const MAX_COLOUR_LIGHTNESS = 70
 
 /**
- * Tube colour as an `hsl()` string. Age drives the hue ramp, as in the
- * reference: tubes just out of development are pink, older ones cool through
- * purple and blue to teal. Tempo shifts the ramp colder or hotter, and the
- * position around the spectrum tints it. `light` sets the brightness.
+ * Hue for a spot on the spectrum (0 = bass … 1 = treble): hot pink for the
+ * bass, through violet and blue to cyan, and neon mint for the treble.
+ */
+export function frequencyHue(pos: number): number {
+  return 330 - 175 * pos
+}
+
+/**
+ * Tube colour as an `hsl()` string. Two hue sources are blended by
+ * `variety`: the age ramp of the reference (pink near the crater, cooling
+ * through purple and blue to teal with depth), and the frequency at that
+ * spot of the tube (frequencyHue). Tempo shifts the result colder or hotter;
+ * `tint` adds per-tube variation. `light` sets the brightness.
  *
  * `white` (0..1) is only for the innermost tube, which burns toward white.
  * With `white` = 0 the colour stays fully saturated and never brighter than
  * MAX_COLOUR_LIGHTNESS, so no other tube can look white however brightly it
  * is lit.
  */
-export function tubeColor(temperature: number, depth: number, pos: number, tint: number, light: number, white: number): string {
-  const hue = 320 - 135 * depth + (temperature - 0.5) * 110 + (pos - 0.5) * 36 + tint
+export function tubeColor(
+  temperature: number,
+  depth: number,
+  pos: number,
+  tint: number,
+  light: number,
+  white: number,
+  variety = 0,
+): string {
+  const ageHue = 320 - 135 * depth + (pos - 0.5) * 36
+  const hue = ageHue + (frequencyHue(pos) - ageHue) * variety + (temperature - 0.5) * 110 + tint
   const lit = 4 + 54 * light
   let lightness: number
   let sat: number

@@ -62,4 +62,27 @@ describe('tube timing', () => {
     for (let i = 0; i < count(t); i++) expect(tube(i).radius).toBeGreaterThan(1)
     expect(count(t)).toBeLessThan(10 * 4.05)
   })
+
+  it('blackouts: the light cuts out at random moments while music plays', () => {
+    const light = (t: Tunnel) => (t as unknown as { light: number }).light
+    const darkSpells = (rate: number) => {
+      const t = new FiberTunnel(48)
+      t.params = { ...t.params, blackoutsPerMinute: rate, blackoutLength: 0.7 }
+      let seed = 11
+      t.random = () => ((seed = (seed * 16807) % 2147483647) / 2147483647)
+      let spells = 0
+      let dark = false
+      for (let f = 0; f < 120 / DT; f++) {
+        t.update(DT, input, true, 0, 30)
+        const isDark = f > 60 && light(t) < 0.05
+        if (isDark && !dark) spells++
+        dark = isDark
+      }
+      return spells
+    }
+    expect(darkSpells(0)).toBe(0) // off: music playing, never dark
+    const n = darkSpells(6) // ~6 a minute over 2 minutes, minus the 3 s minimum gaps
+    expect(n).toBeGreaterThanOrEqual(5)
+    expect(n).toBeLessThanOrEqual(16)
+  })
 })

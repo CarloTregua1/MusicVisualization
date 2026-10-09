@@ -23,4 +23,11 @@ describe('tubeColor', () => {
     expect(l).toBeGreaterThan(90)
     expect(s).toBeLessThan(30)
   })
+
+  it('colour variety spreads hues across the spectrum', () => {
+    const hue = (pos: number, variety: number) => parse(tubeColor(0.5, 0.3, pos, 0, 1, 0, variety)).h
+    const spread = (variety: number) => Math.abs(hue(0, variety) - hue(1, variety))
+    expect(spread(0)).toBeLessThan(40) // age ramp only: frequency barely shows
+    expect(spread(1)).toBeGreaterThan(150) // fully by frequency: pink bass to mint treble
+  })
 })

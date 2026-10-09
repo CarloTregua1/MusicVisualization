@@ -28,6 +28,15 @@ const LIGHT_RESPONSE = 0.08
 const AMBIENT = 0.05
 /** In follow-the-song mode, how long a new tube takes to rise into its shape (s). */
 const SONG_GROW_TIME = 0.06
+/** Blackouts never come closer together than this (s). */
+const MIN_BLACKOUT_GAP = 3
+/**
+ * Each depth-sorted segment is coloured in this many sub-strokes, with colour
+ * and lighting interpolated around the tube, so hue and light change in
+ * small, invisible steps. (Gradient strokes would be smoother still but are
+ * far too slow in WebKit/Safari.)
+ */
+const COLOUR_STEPS = 4
 /** Bloom is computed at this fraction of the canvas size (downscale = cheap blur). */
 const BLOOM_SCALE = 0.25
 
@@ -135,6 +144,11 @@ export class FiberTunnel {
   // Lighting terms from the last shade() call.
   private shadeSpec = 0
   private shadeEdge = 0
+  // Per-segment lighting for this frame (tube × SEGMENTS + segment).
+  private readonly segLight = new Float32Array(MAX_TUBES * SEGMENTS)
+  private readonly segSpec = new Float32Array(MAX_TUBES * SEGMENTS)
+  private readonly segEdge = new Float32Array(MAX_TUBES * SEGMENTS)
+
   private readonly layer: HTMLCanvasElement
   private readonly trail: HTMLCanvasElement
   private readonly bloom: HTMLCanvasElement
@@ -200,7 +214,8 @@ export class FiberTunnel {
     this.time += dt
     this.rollAngle = this.roll.update(dt)
     // The scene light is the white tube's brightness, which follows the music.
-    const target = playing ? input.level : 0
+    // The scene light follows the music, and cuts out during random blackouts.
+    const target = playing && !this.updateBlackout(dt) ? input.level : 0
     this.light += (target - this.light) * (1 - Math.exp(-dt / LIGHT_RESPONSE))
 
     const a = 1 - Math.exp(-dt / this.params.coherence)
@@ -230,6 +245,36 @@ export class FiberTunnel {
     if (!rim || (followSong ? songEvent : rim.age >= develop)) this.birth(input)
     // The white tube keeps developing: it holds the loudest moment of its window.
     this.develop(this.tube(this.count - 1), input, onset)
+  }
+
+  /** Random source for blackouts; replaceable in tests. */
+  random: () => number = Math.random
+  /** Seconds until the next blackout starts, and how long the current one has left. */
+  private blackoutIn = -1
+  private blackoutLeft = 0
+
+  /**
+   * Schedules random blackouts (exponential gaps averaging 60 /
+   * blackoutsPerMinute seconds, never closer than MIN_BLACKOUT_GAP) and
+   * returns whether the light is cut right now.
+   */
+  private updateBlackout(dt: number): boolean {
+    const rate = this.params.blackoutsPerMinute
+    if (rate <= 0) {
+      this.blackoutIn = -1
+      this.blackoutLeft = 0
+      return false
+    }
+    if (this.blackoutLeft > 0) {
+      this.blackoutLeft -= dt
+      return true
+    }
+    if (this.blackoutIn < 0) this.blackoutIn = MIN_BLACKOUT_GAP + (-Math.log(1 - this.random()) * 60) / rate
+    this.blackoutIn -= dt
+    if (this.blackoutIn > 0) return false
+    this.blackoutIn = -1
+    this.blackoutLeft = this.params.blackoutLength * (0.6 + 0.8 * this.random())
+    return true
   }
 
   private birth(input: FiberInput) {
@@ -498,6 +543,24 @@ export class FiberTunnel {
     const depthOrder = Array.from({ length: n }, (_, k) => k)
     depthOrder.sort((a, b2) => this.orderDepth[b2] - this.orderDepth[a])
 
+    // Lighting for every segment, up front: the colour gradients need a whole
+    // tube's lighting at once, so colour and light blend smoothly along it.
+    const whiteIndex = pr.inward ? 0 : this.count - 1
+    for (let i = 0; i < this.count; i++) {
+      const nb = i > 0 ? i - 1 : i + 1 < this.count ? i + 1 : -1
+      const white = i === whiteIndex ? 1 : 0
+      for (let sg = 0; sg < SEGMENTS; sg++) {
+        const pc = (Math.round((sg * P) / SEGMENTS) + Math.round(((sg + 1) * P) / SEGMENTS)) >> 1
+        let lit = AMBIENT + this.light
+        this.shadeSpec = this.shadeEdge = 0
+        if (nb >= 0) lit = this.shade(i, nb, pc, camX, camY, camZ)
+        // The white tube glows with the light it emits.
+        this.segLight[i * SEGMENTS + sg] = white > 0 ? lit + (this.light - lit) * white : lit
+        this.segSpec[i * SEGMENTS + sg] = this.shadeSpec
+        this.segEdge[i * SEGMENTS + sg] = this.shadeEdge
+      }
+    }
+
     // Camera roll: tilt the whole view around the screen centre.
     const rc = Math.cos(this.rollAngle)
     const rs = Math.sin(this.rollAngle)
@@ -506,7 +569,6 @@ export class FiberTunnel {
 
     // The white rim is the light: a halo whose strength follows the music.
     // The innermost tube: the newest when moving outward, the oldest when moving inward.
-    const whiteIndex = pr.inward ? 0 : this.count - 1
     const rimTube = this.tube(whiteIndex)
     if (this.light > 0.01) {
       const o = whiteIndex * P
@@ -539,18 +601,29 @@ export class FiberTunnel {
       // Only the innermost tube is ever white; every other tube keeps its colour
       // (tubeColor caps their lightness so none can look white).
       const white = i === whiteIndex ? 1 : 0
-      const tint = t.jitter * 16
+      // Per-tube variation, plus a shift with the brightness of its sound, so
+      // colours keep changing as the music's timbre does.
+      const tint = t.jitter * 16 + (t.brightness - 0.5) * 70 * pr.colourVariety
       const width = Math.max(0.9, (2 * pr.tubeRadius * Math.pow(R / R_RIM, pr.thicknessGrowth) * focal) / zs[o + pc])
-      const nb = i > 0 ? i - 1 : i + 1 < this.count ? i + 1 : -1
-      let lit = AMBIENT + this.light
-      this.shadeSpec = this.shadeEdge = 0
-      if (nb >= 0) lit = this.shade(i, nb, pc, camX, camY, camZ)
-      // A developing tube glows with the light it emits.
-      const light = white > 0 ? lit + (this.light - lit) * white : lit
+      const light = this.segLight[i * SEGMENTS + sg]
       const pos = this.pos[(pc + shift + P * 4) % P]
 
       const rimWhite = white * this.light
-      const colour = (l: number) => tubeColor(t.temperature, depth, pos, tint, l, rimWhite)
+      const colour = (l: number) => tubeColor(t.temperature, depth, pos, tint, l, rimWhite, pr.colourVariety)
+      // Colour at point k of this tube: hue from its spot on the spectrum, light
+      // interpolated between segment centres, scaled by `factor`.
+      const colourAtPoint = (k: number, factor: number) =>
+        tubeColor(t.temperature, depth, this.pos[(k + shift + P * 4) % P], tint, this.lightAt(i, k) * factor, rimWhite, pr.colourVariety)
+      // Stroke one layer of this segment in COLOUR_STEPS pieces, each its own colour.
+      const steps = (X: Float32Array, Y: Float32Array, off: number, factor: number) => {
+        for (let q = 0; q < COLOUR_STEPS; q++) {
+          const qa = a + Math.round(((b - a) * q) / COLOUR_STEPS)
+          const qb = a + Math.round(((b - a) * (q + 1)) / COLOUR_STEPS)
+          lc.strokeStyle = colourAtPoint((qa + qb) >> 1, factor)
+          this.tracePath(lc, X, Y, off, qa, qb)
+          lc.stroke()
+        }
+      }
       this.tracePath(lc, xs, ys, o, a, b)
 
       // Contact shadow: a soft dark band that darkens whatever lies behind.
@@ -563,7 +636,7 @@ export class FiberTunnel {
         lc.stroke()
       }
       // Edge glow: tube edges seen against the light catch it.
-      const edge = this.shadeEdge * pr.edgeGlow
+      const edge = this.segEdge[i * SEGMENTS + sg] * pr.edgeGlow
       if (edge > 0.03 && detailed) {
         lc.globalCompositeOperation = 'lighter'
         lc.globalAlpha = Math.min(1, fade * edge)
@@ -574,12 +647,10 @@ export class FiberTunnel {
       }
       // Round cylinder: a dark edge in the tube's own colour, then a mid-tone body…
       lc.globalAlpha = fade
-      lc.strokeStyle = colour(light * 0.3)
       lc.lineWidth = width
-      lc.stroke()
-      lc.strokeStyle = colour(light * 0.75)
+      steps(xs, ys, o, 0.3)
       lc.lineWidth = width * 0.74
-      lc.stroke()
+      steps(xs, ys, o, 0.75)
       if (detailed) {
         // …then a lit core shifted toward the light, and a glint where the
         // surface reflects the rim toward the camera.
@@ -593,11 +664,9 @@ export class FiberTunnel {
           this.toLightY[m] = dy / d
         }
         this.shiftTowardLight(o, a, b, width * 0.12)
-        lc.strokeStyle = colour(light * 1.05)
         lc.lineWidth = width * 0.4
-        this.tracePath(lc, this.hlX, this.hlY, 0, a, b)
-        lc.stroke()
-        const glint = this.shadeSpec * pr.specular
+        steps(this.hlX, this.hlY, 0, 1.05)
+        const glint = this.segSpec[i * SEGMENTS + sg] * pr.specular
         if (glint > 0.04) {
           this.shiftTowardLight(o, a, b, width * 0.24)
           lc.strokeStyle = colour(light * 1.1 + glint * 1.5)
@@ -606,13 +675,22 @@ export class FiberTunnel {
           lc.stroke()
         }
       } else {
-        lc.strokeStyle = colour(light)
         lc.lineWidth = width * 0.4
-        lc.stroke()
+        steps(xs, ys, o, 1.05)
       }
     }
     lc.globalAlpha = 1
     lc.globalCompositeOperation = 'source-over'
+  }
+
+  /** Lighting at point k of tube i, interpolated between its segment centres. */
+  private lightAt(i: number, k: number): number {
+    const f = ((k + 0.5) / POINTS) * SEGMENTS - 0.5
+    const s0 = Math.floor(f)
+    const w = f - s0
+    const l0 = this.segLight[i * SEGMENTS + ((s0 + SEGMENTS) % SEGMENTS)]
+    const l1 = this.segLight[i * SEGMENTS + ((s0 + 1) % SEGMENTS)]
+    return l0 + (l1 - l0) * w
   }
 
   /** Fills hlX/hlY with points a..b of the tube at offset o moved `off` px toward the light. */
