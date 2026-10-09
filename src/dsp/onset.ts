@@ -7,14 +7,19 @@
 export class OnsetDetector {
   /** Shortest gap between two onsets, in seconds of audio time. */
   minInterval: number
+  /** An onset needs flux above both `ratio` × its recent average and `floor` (per second). */
+  ratio: number
+  floor: number
   private readonly prev: Float32Array
   private avg = 0
   private last = -Infinity
   private lastTime = NaN
 
-  constructor(bands: number, minInterval = 0.5) {
+  constructor(bands: number, minInterval = 0.5, ratio = 2.2, floor = 12) {
     this.prev = new Float32Array(bands)
     this.minInterval = minInterval
+    this.ratio = ratio
+    this.floor = floor
   }
 
   reset() {
@@ -48,7 +53,7 @@ export class OnsetDetector {
     this.prev.set(levels)
     // Normalize to a per-second rate so the frame rate doesn't matter.
     const rate = flux / dt
-    const threshold = Math.max(12, this.avg * 2.2)
+    const threshold = Math.max(this.floor, this.avg * this.ratio)
     const loudEnough = total / levels.length > 0.12
     this.avg += (rate - this.avg) * (1 - Math.exp(-dt / 0.5))
     if (rate > threshold && loudEnough && t - this.last >= this.minInterval) {

@@ -46,7 +46,8 @@ export function VisualizerView({ player, audio, tempo, tempoProgress, playing, t
     const mapper = new BandMapper(FFT_SIZE, sampleRate)
     const tunnel = new Tunnel(mapper.count)
     const backdrop = new Backdrop()
-    const onsets = new OnsetDetector(mapper.count)
+    // Sensitive enough to catch softer events (hats, plucks), up to ~5 strings a second.
+    const onsets = new OnsetDetector(mapper.count, 0.18, 1.7, 8)
     const input: TunnelInput = { bands: mapper.levels, level: 0, lobes: 5, temperature: 0.5, beat: 0 }
     const win = new Float32Array(FFT_SIZE)
     let temp = 0.5
@@ -98,7 +99,8 @@ export function VisualizerView({ player, audio, tempo, tempoProgress, playing, t
       input.temperature = temp
       input.level = level
 
-      const lifetime = Math.min(2.8, Math.max(1.6, 2.2 * (120 / shownBpm)))
+      // Slow outward travel keeps the strings close together.
+      const lifetime = Math.min(5, Math.max(3, 4 * (120 / shownBpm)))
       tunnel.update(dt, input, lifetime, 0.25 + 0.5 * temp, onset)
       backdrop.draw(ctx, dt, { temperature: temp, level: player.playing ? level : 0, beat: input.beat })
       tunnel.render(ctx)

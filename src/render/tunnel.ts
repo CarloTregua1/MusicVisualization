@@ -1,6 +1,6 @@
 import { neon } from './neon'
 
-const MAX_RINGS = 16
+const MAX_RINGS = 32
 const POINTS = 256
 /** Kaleidoscope symmetry: the spectrum is mirrored this many times around each ring. */
 const FOLDS = 6
@@ -9,6 +9,8 @@ const STOPS_PER_HALF = 5
 /** Filaments linking each string to the next; 2× FOLDS keeps the symmetry. */
 const SPOKES = 12
 const MAX_PULSES = 200
+/** Radial spacing curve: base radius grows as u^SPREAD (1 = even spacing, higher = more perspective). */
+const SPREAD = 1.35
 /** After an onset the newborn string keeps absorbing the attack for this long (s). */
 const CAPTURE_WINDOW = 0.12
 
@@ -101,6 +103,9 @@ export class Tunnel {
   private readonly nodeY = new Float32Array((MAX_RINGS + 1) * SPOKES)
   private readonly nodeAlpha = new Float32Array(MAX_RINGS + 1)
   private readonly nodeU = new Float32Array(MAX_RINGS + 1)
+  /** Base radius and rotation of each live ring this frame. */
+  private readonly nodeBase = new Float32Array(MAX_RINGS + 1)
+  private readonly nodeRot = new Float32Array(MAX_RINGS + 1)
   private readonly ctrl = new Float32Array(2)
   private readonly fold: Float32Array
   private readonly cos: Float32Array
@@ -322,6 +327,7 @@ export class Tunnel {
       lc.lineJoin = 'round'
       lc.lineCap = 'round'
       lc.globalCompositeOperation = 'lighter'
+      this.drawMembranes(lc, cx, cy, minDim)
       this.drawFilaments(lc, px)
       this.drawStrings(lc, cx, cy, px)
       lc.globalCompositeOperation = 'lighter'
@@ -345,7 +351,7 @@ export class Tunnel {
     for (let i = 0; i < this.count; i++) {
       const r = this.ring(i)
       const u = Math.min(r.u, 1)
-      const base = hole + (reach * 1.08 - hole) * Math.pow(u, 1.8)
+      const base = hole + (reach * 1.05 - hole) * Math.pow(u, SPREAD)
       const shape = 0.16 + 0.2 * u
       // Plucked-string vibration: a standing wave whose mode is the note's
       // lobe count, ringing and decaying with age, plus a faster treble shimmer.
@@ -384,6 +390,8 @@ export class Tunnel {
       // Fade in quickly at birth, out near the edge.
       nodeAlpha[i] = smooth(0, 0.04, u) * (1 - smooth(0.72, 1, u))
       nodeU[i] = u
+      this.nodeBase[i] = base
+      this.nodeRot[i] = rot
     }
     // The core node: on the rim of the hollow (nothing is drawn inside it), in the newest ring's frame.
     const n = this.count
@@ -396,6 +404,76 @@ export class Tunnel {
     }
     nodeAlpha[n] = 1
     nodeU[n] = 0
+  }
+
+  /**
+   * A glowing membrane between each pair of neighbouring strings: the band
+   * between the two outlines, filled with the inner string's neon colours and
+   * brightest along both edges. It follows the strings as they bend, and
+   * thins out as the pair drifts apart moving outward.
+   */
+  private drawMembranes(ctx: CanvasRenderingContext2D, cx: number, cy: number, minDim: number) {
+    for (let i = 0; i + 1 < this.count; i++) {
+      const outer = this.ring(i)
+      const inner = this.ring(i + 1)
+      const alpha = Math.min(this.nodeAlpha[i], this.nodeAlpha[i + 1])
+      if (alpha <= 0.01) continue
+      const rIn = this.nodeBase[i + 1]
+      const rOut = this.nodeBase[i]
+      const gap = rOut - rIn
+      const closeness = Math.min(1, Math.max(0.2, 1.5 - gap / (minDim * 0.1)))
+      const shimmer = 0.85 + 0.15 * Math.sin(this.time * 2.2 + outer.serial * 1.3)
+      const a = alpha * closeness * shimmer
+
+      // Build the band in the inner string's frame: its outline, then the outer
+      // outline rotated into that frame, filled even-odd so only the band shows.
+      const rot = this.nodeRot[i + 1]
+      const d = this.nodeRot[i] - rot
+      const dc = Math.cos(d)
+      const ds = Math.sin(d)
+      const oi = this.slot(i + 1) * POINTS
+      const oo = this.slot(i) * POINTS
+      const path = new Path2D()
+      path.moveTo(this.localX[oi], this.localY[oi])
+      for (let p = 1; p < POINTS; p++) path.lineTo(this.localX[oi + p], this.localY[oi + p])
+      path.closePath()
+      for (let p = 0; p < POINTS; p++) {
+        const lx = this.localX[oo + p]
+        const ly = this.localY[oo + p]
+        const x = lx * dc - ly * ds
+        const y = lx * ds + ly * dc
+        if (p === 0) path.moveTo(x, y)
+        else path.lineTo(x, y)
+      }
+      path.closePath()
+
+      ctx.setTransform(1, 0, 0, 1, cx, cy)
+      ctx.rotate(rot)
+      inner.body ??= this.gradient(ctx, inner, 50, 20)
+      ctx.fillStyle = inner.body
+      ctx.globalAlpha = 0.09 * a
+      ctx.fill(path, 'evenodd')
+
+      // Edge glow: bright where the membrane meets each string, faint between.
+      const r0 = Math.max(1, rIn * 0.8)
+      const r1 = rOut * 1.2
+      const span = r1 - r0
+      const at = (r: number) => Math.min(1, Math.max(0, (r - r0) / span))
+      const g = ctx.createRadialGradient(0, 0, r0, 0, 0, r1)
+      const cIn = neon(inner.temperature, 0.35, 66, 1)
+      const cOut = neon(outer.temperature, 0.65, 66, 1)
+      const clear = neon(inner.temperature, 0.5, 60, 0)
+      g.addColorStop(0, clear)
+      g.addColorStop(at(rIn), cIn)
+      g.addColorStop(at(rIn + gap * 0.3), clear)
+      g.addColorStop(at(rOut - gap * 0.3), clear)
+      g.addColorStop(at(rOut), cOut)
+      g.addColorStop(1, clear)
+      ctx.fillStyle = g
+      ctx.globalAlpha = 0.28 * a
+      ctx.fill(path, 'evenodd')
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
   }
 
   /** Control point of the filament from node (i, j) to node (i + 1, j): bowed sideways and swaying. */
