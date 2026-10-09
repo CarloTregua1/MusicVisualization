@@ -9,11 +9,33 @@ import { tempoAt, type TempoTrack } from '../dsp/tempo'
 import { Backdrop } from '../render/backdrop'
 import { bpmToTemperature, neon } from '../render/neon'
 import { FiberTunnel, type FiberInput } from '../render/fiberTunnel'
+import { MEASURED_PARAMS, type TunnelParams } from '../render/tunnelParams'
 import { Transport } from './Transport'
+import { TuningPanel } from './TuningPanel'
 import { useCanvas } from './useCanvas'
 
 const FFT_SIZE = 2048
 const HUD_IDLE_MS = 2500
+const PARAMS_KEY = 'audioToMath.tunnelParams'
+
+/** Tuning is a per-viewer convenience: remembered in this browser if storage works. */
+function loadParams(): TunnelParams {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PARAMS_KEY) ?? 'null')
+    if (saved && typeof saved === 'object') return { ...MEASURED_PARAMS, ...saved }
+  } catch {
+    /* storage unavailable: use defaults */
+  }
+  return { ...MEASURED_PARAMS }
+}
+
+function saveParams(params: TunnelParams) {
+  try {
+    localStorage.setItem(PARAMS_KEY, JSON.stringify(params))
+  } catch {
+    /* storage unavailable: settings last for this session only */
+  }
+}
 
 interface Props {
   player: Player
@@ -35,10 +57,19 @@ export function VisualizerView({ player, audio, tempo, tempoProgress, playing, t
   const [temperature, setTemperature] = useState(0.5)
   const [hudVisible, setHudVisible] = useState(true)
   const [fullscreen, setFullscreen] = useState(false)
+  const [tuning, setTuning] = useState(false)
+  const [params, setParams] = useState<TunnelParams>(loadParams)
+  const [fps, setFps] = useState(60)
+  const paramsRef = useRef(params)
 
   useEffect(() => {
     tempoRef.current = tempo
   }, [tempo])
+
+  useEffect(() => {
+    paramsRef.current = params
+    saveParams(params)
+  }, [params])
 
   // Render loop.
   useEffect(() => {
@@ -57,6 +88,7 @@ export function VisualizerView({ player, audio, tempo, tempoProgress, playing, t
     let speed = 1
     let last = performance.now()
     let lastHud = 0
+    let frames = 0
     let raf = 0
 
     const tick = (now: number) => {
@@ -98,13 +130,18 @@ export function VisualizerView({ player, audio, tempo, tempoProgress, playing, t
       input.temperature = temp
       input.level = level
 
-      // Slow spreading keeps the rings tight; faster music spreads a little faster.
-      const lifetime = Math.min(14, Math.max(8, 11 * (120 / shownBpm)))
+      // Rings spread over the tuned time; faster music spreads a little faster.
+      tunnel.params = paramsRef.current
+      const spread = paramsRef.current.spreadSeconds
+      const lifetime = spread * Math.min(1.3, Math.max(0.75, 120 / shownBpm))
       tunnel.update(dt, input, sounding, onset, lifetime)
+      frames++
       backdrop.draw(ctx, dt, { temperature: temp, level: player.playing ? level : 0, beat })
       tunnel.render(ctx)
 
-      if (now - lastHud > 250) {
+      if (now - lastHud > 500) {
+        setFps((frames * 1000) / (now - lastHud))
+        frames = 0
         lastHud = now
         setBpm(track && !Number.isNaN(bpmNow) ? bpmNow : NaN)
         setTemperature(temp)
@@ -150,7 +187,8 @@ export function VisualizerView({ player, audio, tempo, tempoProgress, playing, t
     else void root.current?.requestFullscreen()
   }
 
-  const showHud = hudVisible || !playing
+  // The HUD stays up while tuning, so the sliders don't fade away mid-adjustment.
+  const showHud = hudVisible || !playing || tuning
   return (
     <div ref={root} className={`viz ${showHud ? '' : 'hud-hidden'}`}>
       <canvas ref={canvas.attach} className="viz-canvas" />
@@ -161,10 +199,14 @@ export function VisualizerView({ player, audio, tempo, tempoProgress, playing, t
         <div className="viz-title" title={audio.name}>
           {audio.name}
         </div>
+        <button className="glass-btn" onClick={() => setTuning((v) => !v)} aria-pressed={tuning}>
+          Tune
+        </button>
         <button className="glass-btn" onClick={toggleFullscreen}>
           {fullscreen ? 'Exit full screen' : 'Full screen'}
         </button>
       </div>
+      {tuning && <TuningPanel params={params} fps={fps} onChange={setParams} onClose={() => setTuning(false)} />}
       <div className="viz-tempo hud">
         <div className="bpm">
           {tempo ? (Number.isNaN(bpm) ? '—' : Math.round(bpm)) : `${Math.round(tempoProgress * 100)}%`}

@@ -1,34 +1,16 @@
 import { RollCamera } from './camera'
+import { MEASURED_PARAMS, type TunnelParams } from './tunnelParams'
 
-/** Upper bound on tubes alive at once (11/s × the longest lifetime, with room to spare). */
-const MAX_TUBES = 160
+/** Upper bound on tubes alive at once (40/s × 16 s at the slider limits). */
+const MAX_TUBES = 640
 const POINTS = 160
 /** Each tube is drawn in this many arcs, depth-sorted and lit separately. */
 const SEGMENTS = 8
-/** Tubes born per second: each spends 1/TUBE_RATE s developing as the white rim of the crater. */
-const TUBE_RATE = 11
 /** Ring radii on the ground: tubes develop at the crater rim and grow until R_MAX. */
 const R_RIM = 1
 const R_MAX = 6
-/**
- * Camera: this far from the crater's centre (horizontally) and this high
- * above the land, looking down at the crater at 45°. Chosen side by side
- * against the reference from 30°, 45° and 60°.
- */
-const CAMERA_DISTANCE = 7.07
-const CAMERA_HEIGHT = 7.07
 /** The camera looks at this height above the crater's centre. */
 const TARGET_HEIGHT = 0.4
-/** Focal length as a multiple of the screen's shorter side. */
-const FOCAL = 2.1
-/** Time constant (s) of the spectrum smoothing, so consecutive tubes stack coherently. */
-const COHERENCE = 0.06
-/** World radius of a tube's cross-section at the rim; tubes thicken as they grow. */
-const TUBE_RADIUS = 0.013
-/** Wave/wall height unit at the rim, in crater radii; heights grow with the ring. */
-const HEIGHT_UNIT = 0.55
-/** Height of the tallest walls, in height units. */
-const WALL_HEIGHT = 1.5
 /** Walls rise only where a band beats the mean of its ±WALL_SPAN neighbours (a spectral peak). */
 const WALL_SPAN = 3
 /** A band must beat its neighbours by this much before any wall rises… */
@@ -37,27 +19,10 @@ const WALL_MIN_CONTRAST = 0.02
 const WALL_CONTRAST = 0.12
 /** Weights used to spread each peak over its neighbours. */
 const WALL_SPREAD = [1, 4, 1]
-/** Small irregular waves along each tube; their height follows the loudness. */
-const WAVE_HEIGHT = 0.5
-/** Sharpness of crests: higher = narrower, more acute peaks over flat troughs. */
-const CREST_SHARPNESS = 3
-/** Irregular lumps in each ring's outline (and so in the crater's rim), relative to its radius. */
-const LUMP = 0.1
-/** How much bass makes a ring breathe wider, relative to its radius. */
-const BREATH = 0.06
-/** How much the bass/treble balance tilts a ring (one side raised), in height units. */
-const TILT = 0.5
-/** Fine jagged spikes along the tube, from treble × noisiness, in height units. */
-const JAG = 0.35
-/** Wave count range around a ring: dull sound gives few broad waves, bright sound many fine ones. */
-const WAVES_MIN = 3
-const WAVES_MAX = 16
 /** After its development, a tube fades from white to its colour over this long (s). */
 const COOL_TIME = 0.12
 /** The light: the white rim, modelled as a point this high above the crater's centre. */
 const LIGHT_HEIGHT = 0.6
-/** Light falls off over this distance (crater radii). */
-const LIGHT_FALLOFF = 3.2
 /** How quickly the scene light follows the music (s): silence goes dark almost at once. */
 const LIGHT_RESPONSE = 0.08
 /** Light that remains when the white tube is dark: practically none. */
@@ -75,7 +40,7 @@ interface Tube {
   temperature: number
   /** Ring radius on the ground. */
   radius: number
-  /** Seconds since birth. Development lasts 1/TUBE_RATE s; then the tube cools and grows. */
+  /** Seconds since birth. Development lasts 1/tubesPerSecond s; then the tube cools and grows. */
   age: number
   /** Small per-tube variation so neighbouring tubes don't coincide exactly. */
   jitter: number
@@ -131,7 +96,7 @@ function tubeColor(temperature: number, depth: number, pos: number, tint: number
  * 1. A tube is born as the crater's rim, glowing white.
  * 2. While white, it develops its shape from the sound of that moment: waves
  *    and walls rise straight up from the ground, all around the ring.
- * 3. After 1/11 s it is done: it takes its colour and spreads outward across
+ * 3. After 1/tubesPerSecond s it is done: it takes its colour and spreads outward across
  *    the land as an ever larger ring, while a new white tube forms the rim.
  * 4. The white rim is the scene's light. Its brightness follows the music,
  *    so when the music stops it goes dark and so does everything.
@@ -146,9 +111,8 @@ export class FiberTunnel {
   private head = -1
   private count = 0
   private time = 0
-  /** Camera height above the land and distance from the crater (crater radii). */
-  cameraHeight = CAMERA_HEIGHT
-  cameraDistance = CAMERA_DISTANCE
+  /** Live-tunable look; see tunnelParams.ts. */
+  params: TunnelParams = { ...MEASURED_PARAMS }
   /** Brightness of the white tube = the scene's light, 0..1. */
   private light = 0
   /** Slow left/right camera roll; this frame's angle in radians. */
@@ -230,7 +194,7 @@ export class FiberTunnel {
   }
 
   /**
-   * Advances by dt. While `playing`, a new white tube is born every 1/11 s
+   * Advances by dt. While `playing`, a new white tube is born every 1/tubesPerSecond s
    * and the previous one starts spreading outward. `lifetime` is the time a
    * ring takes to grow from the rim to the edge of the land.
    */
@@ -241,7 +205,7 @@ export class FiberTunnel {
     const target = playing ? input.level : 0
     this.light += (target - this.light) * (1 - Math.exp(-dt / LIGHT_RESPONSE))
 
-    const a = 1 - Math.exp(-dt / COHERENCE)
+    const a = 1 - Math.exp(-dt / this.params.coherence)
     const sb = this.smoothBands
     for (let i = 0; i < sb.length; i++) sb[i] += (input.bands[i] - sb[i]) * a
 
@@ -249,7 +213,7 @@ export class FiberTunnel {
     // developing white rim stays at the crater.
     const k = Math.log(R_MAX / R_RIM) / lifetime
     const grow = Math.exp(k * dt)
-    const develop = 1 / TUBE_RATE
+    const develop = 1 / this.params.tubesPerSecond
     for (let i = 0; i < this.count; i++) {
       const t = this.tube(i)
       t.age += dt
@@ -373,7 +337,7 @@ export class FiberTunnel {
     lc.globalAlpha = 1
     lc.clearRect(0, 0, W, H)
     // A faint trail of the last frame.
-    lc.globalAlpha = 0.1
+    lc.globalAlpha = this.params.trail
     lc.drawImage(this.trail, 0, 0)
     lc.globalAlpha = 1
 
@@ -396,7 +360,7 @@ export class FiberTunnel {
     bc.drawImage(this.layer, 0, 0, this.bloom.width, this.bloom.height)
     ctx.imageSmoothingEnabled = true
     ctx.globalCompositeOperation = 'lighter'
-    ctx.globalAlpha = 0.25 + 0.35 * this.light
+    ctx.globalAlpha = this.params.bloom * (0.42 + 0.58 * this.light)
     ctx.drawImage(this.bloom, 0, 0, W, H)
     ctx.globalAlpha = 1
     ctx.globalCompositeOperation = 'source-over'
@@ -405,17 +369,21 @@ export class FiberTunnel {
   private drawScene(lc: CanvasRenderingContext2D, W: number, H: number) {
     const cx = W / 2
     const cy = H / 2
-    const focal = FOCAL * Math.min(W, H)
+    const pr = this.params
+    const focal = pr.focal * Math.min(W, H)
+    const camAngle = (pr.cameraAngle * Math.PI) / 180
+    const camHeight = pr.cameraRange * Math.sin(camAngle)
+    const camDistance = pr.cameraRange * Math.cos(camAngle)
     const P = POINTS
     const last = this.tubes[0].bands.length - 1
     const logSpan = Math.log(R_MAX / R_RIM)
-    const develop = 1 / TUBE_RATE
+    const develop = 1 / this.params.tubesPerSecond
     const { xs, ys, zs, wx, wy, wz } = this
 
     // Camera on the land, swaying gently, looking at the crater.
     const camX = 0.25 * Math.sin(this.time * 0.11)
-    const camY = this.cameraHeight + 0.1 * Math.sin(this.time * 0.08 + 1.3)
-    const camZ = -this.cameraDistance
+    const camY = camHeight + 0.1 * Math.sin(this.time * 0.08 + 1.3)
+    const camZ = -camDistance
     let fx = -camX
     let fy = TARGET_HEIGHT - camY
     let fz = -camZ
@@ -454,15 +422,15 @@ export class FiberTunnel {
       // Bass: bigger lumps, a wider (breathing) ring, and a tilt toward the
       // bass/treble balance; brightness: how many waves; mids: wave height;
       // treble × noisiness: fine jagged spikes.
-      const lumpAmp = LUMP * (0.4 + 0.6 * t.level + 1.2 * t.bass) * growth
-      const breath = 1 + BREATH * (t.bass - 0.3) * growth
-      const tilt = TILT * (t.bass - t.treble) * growth
+      const lumpAmp = pr.lump * (0.4 + 0.6 * t.level + 1.2 * t.bass) * growth
+      const breath = 1 + pr.breath * (t.bass - 0.3) * growth
+      const tilt = pr.tilt * (t.bass - t.treble) * growth
       const tiltDir = b * 0.23
-      const waveFreq = WAVES_MIN + (WAVES_MAX - WAVES_MIN) * t.brightness
+      const waveFreq = pr.wavesMin + (pr.wavesMax - pr.wavesMin) * t.brightness
       const waveAmp = 0.5 + 1.2 * t.mid
-      const jag = JAG * t.treble * (0.3 + t.noise) * growth
+      const jag = pr.jag * t.treble * (0.3 + t.noise) * growth
       // Heights scale with the ring, so a tube keeps its shape as it spreads.
-      const hScale = HEIGHT_UNIT * Math.pow(R / R_RIM, 0.85)
+      const hScale = pr.heightUnit * Math.pow(R / R_RIM, 0.85)
       const o = i * P
       for (let p = 0; p < P; p++) {
         const q = this.pos[(p + shift + P * 4) % P] * last
@@ -470,7 +438,7 @@ export class FiberTunnel {
         const f = q - k0
         const lift = t.peaks[k0] * (1 - f) + t.peaks[Math.min(last, k0 + 1)] * f
         // Sharp profile: walls rise to narrow, pointed crests.
-        const shape = Math.pow(lift, CREST_SHARPNESS - 0.8)
+        const shape = Math.pow(lift, Math.max(1, pr.crestSharpness - 0.8))
         const th = (p / P) * 2 * Math.PI
         // Irregular outline: a few low lumps of unrelated sizes, drifting slowly.
         const lumps =
@@ -486,10 +454,10 @@ export class FiberTunnel {
           0.5 * Math.sin(waveFreq * u + b * 0.9) +
           0.3 * Math.sin(waveFreq * 1.7 * u - b * 1.3 + 2.3) +
           0.2 * Math.sin(waveFreq * 2.9 * u + b * 2.1 + 0.6)
-        const ripple = WAVE_HEIGHT * waveAmp * v * v * Math.pow(0.5 + 0.5 * waves, CREST_SHARPNESS)
+        const ripple = pr.waveHeight * waveAmp * v * v * Math.pow(0.5 + 0.5 * waves, pr.crestSharpness)
         // Fine jagged spikes from noisy treble.
         const spikes = jag * Math.pow(0.5 + 0.5 * Math.sin(31 * u + b * 3.7), 6)
-        const h = (WALL_HEIGHT * shape + ripple + spikes) * amp * hScale + tilt * hScale * Math.cos(th - tiltDir)
+        const h = (pr.wallHeight * shape + ripple + spikes) * amp * hScale + tilt * hScale * Math.cos(th - tiltDir)
         const X = rr * this.cos[p]
         const Z = rr * this.sin[p]
         wx[o + p] = X
@@ -540,7 +508,7 @@ export class FiberTunnel {
       lc.lineCap = 'round'
       lc.globalAlpha = Math.min(1, 0.35 * rimWhite * this.light)
       lc.strokeStyle = tubeColor(rimTube.temperature, 0, 0.5, 0, 1, 0.3)
-      lc.lineWidth = Math.max(2, (2 * TUBE_RADIUS * focal) / zs[o]) * 3.5
+      lc.lineWidth = Math.max(2, (2 * pr.tubeRadius * focal) / zs[o]) * 3.5
       this.tracePath(lc, xs, ys, o, 0, P)
       lc.stroke()
       lc.globalCompositeOperation = 'source-over'
@@ -555,7 +523,7 @@ export class FiberTunnel {
       const R = t.radius
       const depth = Math.log(R / R_RIM) / logSpan
       // Fade near the edge of the land, and before a ring reaches the camera.
-      const fade = (1 - smooth(0.85, 1, depth)) * (1 - smooth(0.7, 0.95, R / this.cameraDistance))
+      const fade = (1 - smooth(0.85, 1, depth)) * (1 - smooth(0.7, 0.95, R / camDistance))
       if (fade < 0.01) continue
       const o = i * P
       const a = Math.round((sg * P) / SEGMENTS)
@@ -564,7 +532,7 @@ export class FiberTunnel {
       const shift = Math.round((t.turn / (2 * Math.PI)) * P)
       const white = 1 - smooth(develop, develop + COOL_TIME, t.age)
       const tint = t.jitter * 16
-      const width = Math.max(0.9, (2 * TUBE_RADIUS * Math.pow(R / R_RIM, 0.45) * focal) / zs[o + pc])
+      const width = Math.max(0.9, (2 * pr.tubeRadius * Math.pow(R / R_RIM, pr.thicknessGrowth) * focal) / zs[o + pc])
       const nb = i > 0 ? i - 1 : i + 1 < this.count ? i + 1 : -1
       const lit = nb >= 0 ? this.shade(i, nb, pc, camX, camY, camZ) : AMBIENT + this.light
       // A developing tube glows with the light it emits.
@@ -641,7 +609,7 @@ export class FiberTunnel {
     lx /= dist
     ly /= dist
     lz /= dist
-    const atten = 1 / (1 + (dist / LIGHT_FALLOFF) ** 2)
+    const atten = 1 / (1 + (dist / this.params.lightFalloff) ** 2)
     const diffuse = 0.35 + 0.65 * Math.max(0, nx * lx + ny * ly + nz * lz)
     return AMBIENT + this.light * 2.1 * diffuse * atten
   }
