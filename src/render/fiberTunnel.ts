@@ -4,7 +4,7 @@ import { RollCamera } from './camera'
 const MAX_FIBERS = 200
 const POINTS = 160
 /** Each fibre is stroked as this many arcs, so its colour can follow the spectrum around it. */
-const SEGMENTS = 6
+const SEGMENTS = 12
 /** Fibres emitted per second while sound is present: calm, not a blizzard. */
 const EMIT_RATE = 24
 /** Camera-space depths: fibres are born at Z_FAR (the hollow) and die past Z_NEAR. */
@@ -28,6 +28,10 @@ const WALL_CONTRAST = 0.16
 const WALL_SPREAD = [1, 3, 5, 6, 5, 3, 1]
 /** Wall height on the floor relative to the top of the tunnel. */
 const FLOOR_WALLS = 0.3
+/** The innermost fibres, up to this age, burn white-hot like the reference's rim. */
+const WHITE_AGE = 0.08
+/** Main light at the hollow: brightness falls off over this distance (tunnel radii). */
+const LIGHT_FALLOFF = 3.4
 /** Bloom is computed at this fraction of the canvas size (downscale = cheap blur). */
 const BLOOM_SCALE = 0.25
 
@@ -66,16 +70,28 @@ const smooth = (e0: number, e1: number, x: number) => {
 }
 
 /**
- * Fibre colour. Age drives the main ramp, as in the reference: the newest
- * fibre (the rim of the hollow) is white-hot pink, older ones cool through
- * purple and blue to teal. Tempo shifts the whole ramp colder or hotter, and
- * the fibre's position around the spectrum tints it, so frequencies still
- * read as different hues. Always fully saturated neon.
+ * Lit fibre colour. Age drives the hue ramp, as in the reference: the newest
+ * fibres are pink, older ones cool through purple and blue to teal. Tempo
+ * shifts the whole ramp colder or hotter, and the position around the
+ * spectrum tints it, so frequencies still read as different hues.
+ * `light` (from the lighting model) sets the brightness, `spec` adds a
+ * white glint, and `white` (1 for the innermost fibres) burns to white-hot.
  */
-function fiberColor(temperature: number, age: number, pos: number, energy: number, tint: number): string {
+function litColor(
+  temperature: number,
+  age: number,
+  pos: number,
+  tint: number,
+  light: number,
+  spec: number,
+  white: number,
+): string {
   const hue = 320 - 135 * age + (temperature - 0.5) * 110 + (pos - 0.5) * 36 + tint
-  const light = Math.min(92, 52 + 28 * Math.pow(1 - age, 3) + 16 * energy)
-  return `hsl(${(((hue % 360) + 360) % 360).toFixed(0)}, 100%, ${light.toFixed(0)}%)`
+  let l = 12 + 50 * light + 30 * spec
+  l = l + (96 - l) * white
+  const lightness = Math.min(96, Math.max(8, l))
+  const sat = Math.max(0, 100 - 75 * white - 45 * Math.min(1, spec))
+  return `hsl(${(((hue % 360) + 360) % 360).toFixed(0)}, ${sat.toFixed(0)}%, ${lightness.toFixed(0)}%)`
 }
 
 /**
@@ -113,6 +129,8 @@ export class FiberTunnel {
   private readonly xs = new Float32Array(MAX_FIBERS * POINTS)
   private readonly ys = new Float32Array(MAX_FIBERS * POINTS)
   private readonly vs = new Float32Array(MAX_FIBERS * POINTS)
+  /** World-space radius per point (tunnel radii), for lighting. */
+  private readonly wr = new Float32Array(MAX_FIBERS * POINTS)
   /** Screen radius of the newer neighbour at each angle, for the no-crossing rule. */
   private readonly inner = new Float32Array(POINTS)
   private readonly layer: HTMLCanvasElement
@@ -259,6 +277,84 @@ export class FiberTunnel {
     f.jitter = ((this.serial++ * 0.618034) % 1) - 0.5
   }
 
+  /** World position of point p on live fibre i: (x, y) across the tunnel, z along it. */
+  private world(i: number, p: number, out: Float32Array) {
+    const k = ((p % POINTS) + POINTS) % POINTS
+    const r = this.wr[i * POINTS + k]
+    out[0] = r * this.cos[k]
+    out[1] = r * this.sin[k]
+    out[2] = this.fiber(i).z
+  }
+
+  private readonly w0 = new Float32Array(3)
+  private readonly w1 = new Float32Array(3)
+  private readonly w2 = new Float32Array(3)
+
+  /**
+   * Lighting for point p of live fibre i, treating the fibres as samples of a
+   * 3D surface. Its normal comes from the tangent along the fibre and the step
+   * to the neighbouring fibre `nb`. The main light sits in the hollow (the far
+   * end of the tunnel), so surfaces facing it glow and brightness falls off
+   * toward the camera; a specular glint and a rim term make silhouettes catch
+   * the light.
+   */
+  private shade(i: number, nb: number, p: number, z: number): { light: number; spec: number } {
+    const { w0, w1, w2 } = this
+    this.world(i, p - 1, w0)
+    this.world(i, p + 1, w1)
+    const ax = w1[0] - w0[0]
+    const ay = w1[1] - w0[1]
+    const az = w1[2] - w0[2]
+    this.world(nb, p, w0)
+    this.world(i, p, w2)
+    const bx = w0[0] - w2[0]
+    const by = w0[1] - w2[1]
+    const bz = w0[2] - w2[2]
+    let nx = ay * bz - az * by
+    let ny = az * bx - ax * bz
+    let nz = ax * by - ay * bx
+    const nl = Math.hypot(nx, ny, nz) || 1
+    nx /= nl
+    ny /= nl
+    nz /= nl
+    // Face the inside of the tunnel (toward its axis).
+    const k = ((p % POINTS) + POINTS) % POINTS
+    if (-(nx * this.cos[k] + ny * this.sin[k]) < 0) {
+      nx = -nx
+      ny = -ny
+      nz = -nz
+    }
+    const [px, py] = w2
+    // Main light: the hollow.
+    let lx = -px
+    let ly = -py
+    let lz = Z_FAR - z
+    const dist = Math.hypot(lx, ly, lz) || 1
+    lx /= dist
+    ly /= dist
+    lz /= dist
+    const atten = 1 / (1 + (dist / LIGHT_FALLOFF) ** 2)
+    const diffuse = Math.max(0, nx * lx + ny * ly + nz * lz)
+    // View direction: toward the camera, which sits above the tunnel axis.
+    let vx = -px
+    let vy = -CAMERA_HEIGHT - py
+    let vz = -z
+    const vl = Math.hypot(vx, vy, vz) || 1
+    vx /= vl
+    vy /= vl
+    vz /= vl
+    let hx = lx + vx
+    let hy = ly + vy
+    let hz = lz + vz
+    const hl = Math.hypot(hx, hy, hz) || 1
+    hx /= hl
+    hy /= hl
+    hz /= hl
+    const spec = Math.pow(Math.max(0, nx * hx + ny * hy + nz * hz), 24) * atten * 2
+    const rim = Math.pow(1 - Math.abs(nx * vx + ny * vy + nz * vz), 3)
+    return { light: 0.32 + 1.7 * diffuse * atten + 0.35 * rim, spec }
+  }
+
   private ensureLayers(W: number, H: number) {
     for (const c of [this.layer, this.trail]) {
       if (c.width !== W || c.height !== H) {
@@ -357,6 +453,7 @@ export class FiberTunnel {
         xs[o + p] = ox + rho * this.cos[p]
         ys[o + p] = oy + rho * this.sin[p]
         vs[o + p] = v
+        this.wr[o + p] = rho / s
       }
       innerS = s
     }
@@ -381,6 +478,23 @@ export class FiberTunnel {
       lc.lineWidth = Math.max(0.8, (1.0 * px) / Math.pow(z, 0.7)) * (1 + 0.8 * f.onset)
       // Each fibre gets its own slight hue, so neighbours stay distinguishable.
       const tint = f.jitter * 16
+      // The innermost fibres burn white-hot, with a pink glow around them.
+      const white = 1 - smooth(0, WHITE_AGE, age)
+      if (white > 0.05) {
+        lc.beginPath()
+        lc.moveTo(xs[o], ys[o])
+        for (let p = 1; p < POINTS; p++) lc.lineTo(xs[o + p], ys[o + p])
+        lc.closePath()
+        const lw = lc.lineWidth
+        lc.strokeStyle = litColor(f.temperature, 0, 0.5, 0, 1.1, 0, 0)
+        lc.globalAlpha = Math.min(1, alpha) * 0.3 * white
+        lc.lineWidth = lw * 6
+        lc.stroke()
+        lc.lineWidth = lw
+        lc.globalAlpha = Math.min(1, alpha)
+      }
+      // Neighbour fibre used for the surface's second tangent (across fibres).
+      const nb = i + 1 < this.count ? i + 1 : i - 1
       for (let sg = 0; sg < SEGMENTS; sg++) {
         // Integer bounds: POINTS needn't be a multiple of SEGMENTS.
         const a = Math.round((sg * POINTS) / SEGMENTS)
@@ -389,7 +503,17 @@ export class FiberTunnel {
         let e = 0
         for (let p = a; p < b; p++) e += vs[o + (p % POINTS)]
         e = e / (b - a) + f.onset * 0.6 + this.flash * 0.3
-        lc.strokeStyle = fiberColor(f.temperature, age, this.pos[(((a + b) >> 1) + shift + POINTS * 4) % POINTS], e, tint)
+        const pc = (a + b) >> 1
+        const { light, spec } = nb >= 0 ? this.shade(i, nb, pc, z) : { light: 0.8, spec: 0 }
+        lc.strokeStyle = litColor(
+          f.temperature,
+          age,
+          this.pos[(pc + shift + POINTS * 4) % POINTS],
+          tint,
+          light * (0.75 + 0.35 * e),
+          spec,
+          white,
+        )
         lc.beginPath()
         // Smooth curve: each point is a control point, passing through the
         // midpoints between points. Segments join exactly where they meet.
